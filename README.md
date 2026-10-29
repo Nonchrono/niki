@@ -61,6 +61,9 @@ cargo run
 
 빌드 완료 시 `target/release/Niki.app` 및 `target/release/Niki_macOS.dmg`가 생성됩니다. 앱 데이터는 각 운영체제의 사용자별 앱 데이터 폴더에 저장되며, 개발·테스트에서는 `NIKI_JOURNAL_DATA_DIR` 환경 변수로 저장 위치를 바꿀 수 있습니다.
 
+> **macOS 첫 실행 시 보안 경고가 나타나는 경우:**
+> Apple Developer 유료 인증서로 공증되지 않은 오픈소스 앱은 macOS Gatekeeper에 의해 첫 실행 시 차단될 수 있습니다. Finder의 **응용 프로그램** 폴더에서 `Niki.app`을 **Control 키를 누른 채 클릭(우클릭) > [열기]**를 누르거나, 터미널에서 `xattr -cr /Applications/Niki.app`을 실행하면 정상 실행됩니다.
+
 ## 현재 제공 기능
 
 - 여러 일기장(우클릭 수정·삭제), 글 작성·수정·휴지통·휴지통 비우기·복원, 자동 저장
