@@ -1,0 +1,11 @@
+/target
+/gen
+/dev-data
+.env
+oauth-client.json
+client_secret*.json
+*secret*.json
+drive-config.json
+journal.json
+*.key
+*.pem
