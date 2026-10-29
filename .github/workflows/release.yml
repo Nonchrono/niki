@@ -1,0 +1,111 @@
+name: Build and Release Niki
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '배포할 버전 태그 (예: v0.1.0, v0.1.1)'
+        required: true
+        default: 'v0.1.0'
+      notes:
+        description: '업데이트 안내 문구 (릴리스 노트)'
+        required: false
+        default: 'Niki 업데이트 배포'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Prepare version and OAuth config
+        id: prep
+        shell: pwsh
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_NOTES: ${{ github.event.inputs.notes }}
+          REF_NAME: ${{ github.ref_name }}
+          CLIENT_ID: ${{ secrets.NIKI_GOOGLE_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.NIKI_GOOGLE_CLIENT_SECRET }}
+        run: |
+          $tag = if ($env:INPUT_TAG) { $env:INPUT_TAG.Trim() } else { $env:REF_NAME.Trim() }
+          if (-not $tag.StartsWith("v")) { $tag = "v$tag" }
+          $version = $tag.TrimStart("v", "V")
+          $notes = if ($env:INPUT_NOTES) { $env:INPUT_NOTES } else { "Niki v$version 업데이트" }
+
+          # 태그 버전과 Cargo.toml / tauri.conf.json 버전을 자동으로 일치시킴
+          (Get-Content Cargo.toml -Raw) -replace '(?m)^version\s*=\s*"[^"]+"', "version = `"$version`"" | Set-Content Cargo.toml -Encoding UTF8
+          (Get-Content tauri.conf.json -Raw) -replace '"version":\s*"[^"]+"', "`"version`": `"$version`"" | Set-Content tauri.conf.json -Encoding UTF8
+
+          if ($env:CLIENT_ID) {
+            $json = @{
+              installed = @{
+                client_id = $env:CLIENT_ID.Trim()
+                client_secret = if ($env:CLIENT_SECRET) { $env:CLIENT_SECRET.Trim() } else { "" }
+              }
+            } | ConvertTo-Json -Depth 4
+            Set-Content -Path "oauth-client.json" -Value $json -Encoding UTF8
+          }
+
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "notes=$notes" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Build release installer (Niki_Setup.exe)
+        shell: pwsh
+        run: |
+          Remove-Item Cargo.lock -Force -ErrorAction SilentlyContinue
+          cargo build --release
+          Copy-Item -Force "target/release/niki_journal.exe" "target/release/Niki_Setup.exe"
+
+      - name: Generate latest.json manifest
+        shell: pwsh
+        env:
+          TAG: ${{ steps.prep.outputs.tag }}
+          VERSION: ${{ steps.prep.outputs.version }}
+          NOTES: ${{ steps.prep.outputs.notes }}
+          REPO: ${{ github.repository }}
+        run: |
+          $sha256 = (Get-FileHash -Path "target/release/Niki_Setup.exe" -Algorithm SHA256).Hash.ToLower()
+          $pubDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          $downloadUrl = "https://github.com/$($env:REPO)/releases/download/$($env:TAG)/Niki_Setup.exe"
+
+          $manifest = @{
+            version = $env:VERSION
+            notes = $env:NOTES
+            pub_date = $pubDate
+            platforms = @{
+              "windows-x86_64" = @{
+                url = $downloadUrl
+                signature = ""
+                sha256 = $sha256
+              }
+            }
+          } | ConvertTo-Json -Depth 5
+
+          Set-Content -Path "target/release/latest.json" -Value $manifest -Encoding UTF8
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.prep.outputs.tag }}
+          name: Niki ${{ steps.prep.outputs.tag }}
+          body: ${{ steps.prep.outputs.notes }}
+          draft: false
+          prerelease: false
+          files: |
+            target/release/Niki_Setup.exe
+            target/release/latest.json
