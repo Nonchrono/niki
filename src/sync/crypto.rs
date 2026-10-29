@@ -110,7 +110,7 @@ pub fn decrypt(key: &[u8; 32], identity: &[u8], object: &[u8]) -> Result<Vec<u8>
             aead::Aad::from(&aad),
             &mut body,
         )
-        .map_err(|_| "인증 실패")?;
+        .map_err(|_| "동기화 복구 키가 일치하지 않아 원격 데이터를 해독할 수 없습니다. 기존 기기의 복구 키를 등록해 주세요.")?;
     Ok(plain.to_vec())
 }
 
