@@ -9,6 +9,20 @@ const MAGIC: &[u8] = b"NIKISY01";
 pub const ACCOUNT_KEY_UUID: Uuid = Uuid::from_u128(0x4e494b49_4b45_5931_0000_000000000001);
 pub const ACCOUNT_ENVELOPE_KEY: [u8; 32] = *b"NikiJournalGoogleDriveAutoKeyV01";
 
+/// Derives a deterministic 256-bit encryption key from the user's Google account email.
+/// This allows any device authenticated with the same Google account to automatically
+/// decrypt and sync entries seamlessly without manual recovery key entry.
+pub fn derive_account_sync_key(email: &str) -> [u8; 32] {
+    let normalized = email.trim().to_ascii_lowercase();
+    let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+    ctx.update(b"NikiJournal::GoogleDriveSyncKey::v1::");
+    ctx.update(normalized.as_bytes());
+    let d = ctx.finish();
+    let mut key = [0u8; 32];
+    key.copy_from_slice(d.as_ref());
+    key
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct DriveFile {
     pub id: String,
@@ -287,8 +301,8 @@ impl DriveClient {
     pub fn ensure_cloud_sync_key(
         &self,
         token: &str,
-        local_key: Option<[u8; 32]>,
-    ) -> Result<([u8; 32], bool), String> {
+        canonical_key: [u8; 32],
+    ) -> Result<bool, String> {
         let files = self.list(token)?;
         let key_name = ACCOUNT_KEY_UUID.to_string();
         let key_file = files.iter().find(|f| f.name == key_name);
@@ -297,55 +311,40 @@ impl DriveClient {
             .filter_map(|f| crate::sync_engine::parse_revision_uuid(&f.name).map(|u| (f, u)))
             .collect();
 
-        if let Some(kf) = key_file
-            && let Ok(plain) = self.download_decrypted(
+        let mut key_file_matches = false;
+        if let Some(kf) = key_file {
+            if let Ok(plain) = self.download_decrypted(
                 token,
                 &kf.id,
                 ACCOUNT_KEY_UUID,
                 &ACCOUNT_ENVELOPE_KEY,
-            )
-            && let Ok(cloud_key) = <[u8; 32]>::try_from(plain.as_slice())
-        {
-            let mut cleaned_legacy = false;
-            for (rf, ruuid) in &rev_files {
-                if self.download_decrypted(token, &rf.id, *ruuid, &cloud_key).is_err() {
-                    let _ = self.delete(token, &rf.id);
-                    cleaned_legacy = true;
+            ) {
+                if plain.as_slice() == canonical_key.as_slice() {
+                    key_file_matches = true;
                 }
             }
-            let changed = local_key != Some(cloud_key) || cleaned_legacy;
-            return Ok((cloud_key, changed));
+            if !key_file_matches {
+                let _ = self.delete(token, &kf.id);
+            }
+        }
+        if !key_file_matches {
+            let _ = self.upload_encrypted(
+                token,
+                ACCOUNT_KEY_UUID,
+                &ACCOUNT_ENVELOPE_KEY,
+                &canonical_key,
+            );
         }
 
-        let mut chosen_key = local_key.unwrap_or(ACCOUNT_ENVELOPE_KEY);
-        let mut reset_needed = false;
-
-        if let Some((first_rf, first_uuid)) = rev_files.first() {
-            if let Some(lk) = local_key
-                && self.download_decrypted(token, &first_rf.id, *first_uuid, &lk).is_ok()
-            {
-                chosen_key = lk;
-            } else if self
-                .download_decrypted(token, &first_rf.id, *first_uuid, &ACCOUNT_ENVELOPE_KEY)
-                .is_ok()
-            {
-                chosen_key = ACCOUNT_ENVELOPE_KEY;
-                reset_needed = local_key != Some(ACCOUNT_ENVELOPE_KEY);
-            } else {
-                for f in &files {
-                    let _ = self.delete(token, &f.id);
-                }
-                reset_needed = true;
+        let mut cleaned_legacy = false;
+        for (rf, ruuid) in &rev_files {
+            if self.download_decrypted(token, &rf.id, *ruuid, &canonical_key).is_err() {
+                let _ = self.delete(token, &rf.id);
+                cleaned_legacy = true;
             }
         }
 
-        let _ = self.upload_encrypted(
-            token,
-            ACCOUNT_KEY_UUID,
-            &ACCOUNT_ENVELOPE_KEY,
-            &chosen_key,
-        );
-        Ok((chosen_key, reset_needed))
+        Ok(cleaned_legacy)
     }
 }
 
@@ -365,6 +364,16 @@ fn read_limited(reader: impl Read, limit: usize) -> Result<Vec<u8>, String> {
 mod tests {
     use super::*;
     use std::{io::Write, net::TcpListener, thread};
+    #[test]
+    fn derives_deterministic_account_key() {
+        let k1 = derive_account_sync_key("test@example.com");
+        let k2 = derive_account_sync_key("  TEST@example.com ");
+        let k3 = derive_account_sync_key("other@example.com");
+        assert_eq!(k1, k2);
+        assert_ne!(k1, k3);
+        assert_ne!(k1, [0u8; 32]);
+    }
+
     #[test]
     fn enforces_size_and_requires_ciphertext() {
         assert!(read_limited(&b"12345"[..], 4).is_err());

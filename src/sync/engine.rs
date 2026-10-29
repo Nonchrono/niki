@@ -274,7 +274,9 @@ pub fn sync_with_transport(
     let mut summary = SyncSummary::default();
 
     // 1. Pull remote changes
-    let (candidate_files, next_cursor) = if let Some(cursor) = store.sync_cursor.clone() {
+    let (candidate_files, next_cursor) = if let Some(cursor) = store.sync_cursor.clone()
+        && (!store.entries.is_empty() || !store.seen_remote_objects.is_empty())
+    {
         let batch = transport.changes(&cursor)?;
         let known_file_ids: HashSet<&str> = store
             .seen_remote_objects

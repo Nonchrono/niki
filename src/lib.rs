@@ -362,15 +362,19 @@ async fn drive_connect(
             ),
             None => (None, None),
         };
-        let (active_key, reset_needed) = match drive_transport::DriveClient::new()
-            .and_then(|c| c.ensure_cloud_sync_key(&tokens.access_token, existing_key))
-        {
-            Ok((k, reset)) => (k, reset),
-            Err(_) => (
-                existing_key.unwrap_or(drive_transport::ACCOUNT_ENVELOPE_KEY),
-                false,
-            ),
+        let active_key = if let Some(ref email) = account_email {
+            drive_transport::derive_account_sync_key(email)
+        } else {
+            existing_key.unwrap_or(drive_transport::ACCOUNT_ENVELOPE_KEY)
         };
+        let mut reset_needed = existing_key != Some(active_key);
+        if let Ok(client) = drive_transport::DriveClient::new() {
+            if let Ok(cleaned) = client.ensure_cloud_sync_key(&tokens.access_token, active_key) {
+                if cleaned {
+                    reset_needed = true;
+                }
+            }
+        }
         let _ = drive_auth::save_sync_key(&active_key);
         let encoded_key = sync_crypto::encode_recovery_key(&active_key);
         save_drive_config(
@@ -503,8 +507,38 @@ async fn drive_sync_now(state: State<'_, AppState>) -> Result<sync_engine::SyncS
     let data_dir_for_task = data_dir.clone();
     let sync_result = tauri::async_runtime::spawn_blocking(move || {
         let token = drive_auth::acquire_access_token(&client_id)?;
+        let mut cfg = load_drive_config(&data_dir_for_task);
+        let mut account_email = cfg.as_ref().and_then(|c| c.account_email.clone());
+        if account_email.is_none() {
+            if let Some((name, email)) = drive_auth::fetch_user_profile(&token) {
+                if let Some(ref mut c) = cfg {
+                    if !name.is_empty() {
+                        c.account_name = Some(name);
+                    }
+                    if !email.is_empty() {
+                        c.account_email = Some(email.clone());
+                    }
+                    let _ = save_drive_config(&data_dir_for_task, c);
+                }
+                if !email.is_empty() {
+                    account_email = Some(email);
+                }
+            }
+        }
+
+        let key = if let Some(ref email) = account_email {
+            drive_transport::derive_account_sync_key(email)
+        } else {
+            local_key.unwrap_or(drive_transport::ACCOUNT_ENVELOPE_KEY)
+        };
+
+        let mut reset_needed = local_key != Some(key);
         let client = drive_transport::DriveClient::new()?;
-        let (key, reset_needed) = client.ensure_cloud_sync_key(&token, local_key)?;
+        if let Ok(cleaned) = client.ensure_cloud_sync_key(&token, key) {
+            if cleaned {
+                reset_needed = true;
+            }
+        }
         persist_local_sync_key(&data_dir_for_task, &key);
         if reset_needed {
             working_store.sync_cursor = None;
