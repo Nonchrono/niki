@@ -436,6 +436,7 @@ pub fn download_and_apply_update(saved: &UpdaterConfig) -> Result<String, String
                 .map_err(|e| format!("MSI 설치 프로그램 실행 실패: {e}"))?;
         } else {
             Command::new(&temp_path)
+                .arg("--silent")
                 .spawn()
                 .map_err(|e| format!("설치 프로그램 실행 실패: {e}"))?;
         }

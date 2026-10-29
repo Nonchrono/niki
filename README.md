@@ -12,6 +12,7 @@ niki/
 ├── src/                   # Rust 백엔드 소스 코드
 │   ├── archive/           # ZIP/Day One 아카이브 리더 (zip_read.rs)
 │   ├── drive/             # Google OAuth 인증 및 Drive API 전송 (auth.rs, transport.rs)
+│   ├── installer/         # Windows PC 설치/제거 및 바로가기 등록 (mod.rs)
 │   ├── sync/              # AES-256-GCM 암호화, 미디어 청크, 3-way 병합 엔진 (crypto.rs, engine.rs, media.rs, merge.rs)
 │   ├── updater/           # Ed25519/SHA-256 검증 기반 자동 업데이터 (mod.rs)
 │   ├── lib.rs             # Tauri 명령 핸들러 및 로컬 저장소 관리

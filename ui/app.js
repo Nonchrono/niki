@@ -234,32 +234,36 @@ function settings(c) {
 function renderAboutSettings(pane) {
   const cfg = data.updater_config || {};
   const ver = data.app_version || '0.1.0';
-  pane.innerHTML = '<div class="wide-head"><h2>앱 정보 및 자동 업데이트</h2></div>'
+  pane.innerHTML = '<div class="wide-head"><h2>앱 정보</h2></div>'
     +'<div class="panel-card"><h3>Niki v'+esc(ver)+'</h3>'
     +'<p>구독과 광고 없이 로컬에서 사용하며, 선택 시 사용자의 Google Drive(<code>appDataFolder</code>)를 통해 256비트 종단간 암호화 동기화를 지원합니다.</p>'
+    +'<p><strong>PC 설치 상태:</strong> '+(data.running_installed ? '<span class="badge-connected">● PC 설치 버전 실행 중</span>' : data.installed_on_pc ? '설치됨 (현재 빌드 폴더에서 실행 중)' : '미설치')+(data.install_path?'<br><span class="subtle">설치 경로: '+esc(data.install_path)+'</span>':'')+'</p>'
     +(updateInfo ? '<p><strong>최신 확인 버전:</strong> v'+esc(updateInfo.latest_version)+' '+(updateInfo.update_available ? '<span class="badge-connected">업데이트 가능</span>' : '(최신 버전 사용 중)')+(updateInfo.notes?'<br><span class="subtle">'+esc(updateInfo.notes)+'</span>':'')+'</p>' : '')
     +'<div class="panel-actions">'
     +'<button class="ghost" data-action="updater-check-now">지금 업데이트 확인</button>'
     +(updateInfo?.update_available ? '<button class="primary" data-action="updater-install">✨ v'+esc(updateInfo.latest_version)+' 다운로드 및 재시작</button>' : '')
-    +'</div></div>'
-    +'<div class="panel-card"><h3>업데이트 서버 설정 (GitHub Releases / 자체 웹 서버)</h3>'
-    +'<p>처음에는 GitHub 저장소(예: <code>아이디/저장소</code> 또는 <code>https://github.com/아이디/저장소/releases/latest/download/latest.json</code>)를 입력해 사용하고, 추후 별도 웹 서버로 이전할 때 해당 서버의 <code>latest.json</code> 주소로 바꾸면 됩니다. 프로젝트 루트의 <code>updater-config.json</code>에 적어 빌드하면 모든 사용자에게 기본 적용됩니다.</p>'
+    +'<button class="ghost" data-action="install-to-pc">'+(data.installed_on_pc?'PC 설치본 갱신 및 바로가기 재생성':'이 PC에 설치하기 (바탕화면·시작 메뉴 등록)')+'</button>'
+    +'</div></div>';
+  /* [개발자 전용 UI: 업데이트 서버 설정 및 latest.json 매니페스트 생성 도구]
+  pane.innerHTML += '<div class="panel-card"><h3>업데이트 서버 설정 (GitHub Releases / 자체 웹 서버)</h3>'
+    +'<p>처음에는 GitHub 저장소를 입력해 사용하고, 추후 별도 웹 서버로 이전할 때 해당 서버의 <code>latest.json</code> 주소로 바꾸면 됩니다. 프로젝트 루트의 <code>updater-config.json</code>에 적어 빌드하면 모든 사용자에게 기본 적용됩니다.</p>'
     +'<input id="updater-endpoint" placeholder="예: myid/niki 또는 https://updates.example.com/niki/latest.json" value="'+esc(cfg.endpoint||'')+'">'
     +'<input id="updater-pubkey" placeholder="Ed25519 서명 검증 공개키 (Base64, 선택 사항)" value="'+esc(cfg.pubkey||'')+'">'
     +'<label class="check-row"><input type="checkbox" id="updater-auto-check" '+(cfg.auto_check!==false?'checked':'')+'><span>앱을 켤 때 자동으로 새 버전 확인 및 알림 표시</span></label>'
     +'<div class="panel-actions"><button class="primary" data-action="updater-save-config">업데이트 설정 저장</button></div>'
     +'<details class="oauth-details"><summary>개발자 배포 도구 (서명 키 및 latest.json 매니페스트 생성)</summary>'
     +'<div class="oauth-details-body">'
-    +'<p style="margin:0 0 8px">새 버전을 빌드한 뒤 GitHub Releases나 자체 웹 서버에 올릴 <code>latest.json</code> 파일(SHA-256 해시 및 Ed25519 디지털 서명 포함)을 생성합니다.</p>'
+    +'<p style="margin:0 0 8px">새 버전을 빌드한 뒤 GitHub Releases나 자체 웹 서버에 올릴 <code>Niki_Setup.exe</code> 설치 파일과 <code>latest.json</code> 파일(SHA-256 해시 및 Ed25519 디지털 서명 포함)을 생성합니다.</p>'
     +'<div class="panel-actions" style="margin-bottom:8px"><button class="ghost" data-action="updater-gen-keypair">새 Ed25519 서명 키 쌍 생성</button></div>'
     +(generatedKeyPair ? '<p><strong>공개키 (updater-config.json의 pubkey에 저장):</strong><br><code style="user-select:all;word-break:break-all">'+esc(generatedKeyPair.public_key_base64)+'</code><br><strong>개인키 (개발자만 안전하게 보관):</strong><br><code style="user-select:all;word-break:break-all">'+esc(generatedKeyPair.private_key_pkcs8_base64)+'</code></p>' : '')
     +'<input id="manifest-version" placeholder="배포할 새 버전 (예: 0.1.1)" value="'+esc(ver)+'">'
-    +'<input id="manifest-url" placeholder="다운로드 URL (예: https://github.com/아이디/niki/releases/download/v0.1.1/niki_journal.exe)">'
+    +'<input id="manifest-url" placeholder="다운로드 URL (예: https://github.com/Nonchrono/niki/releases/download/v0.1.1/Niki_Setup.exe)">'
     +'<input id="manifest-notes" placeholder="업데이트 안내 문구 (예: 새로운 기능 추가 및 버그 수정)">'
     +'<input id="manifest-privkey" type="password" placeholder="Ed25519 개인키 (Base64, 비워 두면 SHA-256 해시만 포함)" value="'+esc(generatedKeyPair?.private_key_pkcs8_base64||'')+'">'
-    +'<div class="panel-actions"><button class="ghost" data-action="updater-build-manifest">latest.json 생성 (실행 파일 폴더에 자동 저장)</button></div>'
+    +'<div class="panel-actions"><button class="ghost" data-action="updater-build-manifest">Niki_Setup.exe 및 latest.json 생성</button></div>'
     +(generatedManifest ? '<textarea readonly style="margin-top:10px;font-family:monospace;font-size:11px;min-height:140px">'+esc(generatedManifest)+'</textarea>' : '')
     +'</div></details></div>';
+  */
 }
 function entryInput() { const e=selected(); if(!e) return null; return {id:e.id,journalId:document.getElementById('entry-journal')?.value||e.journal_id,title:document.getElementById('entry-title')?.value??e.title,body:document.getElementById('entry-body')?.value??e.body,date:document.getElementById('entry-date')?.value||e.date,favorite:e.favorite,tags:(document.getElementById('entry-tags')?.value||e.tags.join(',')).split(',').map(x=>x.trim()).filter(Boolean),location:document.getElementById('entry-location')?.value??e.location,weather:document.getElementById('entry-weather')?.value??e.weather}; }
 function scheduleSave() { const status=document.getElementById('save-status'); if(status) status.textContent='저장 대기 중…'; clearTimeout(saveTimer); saveTimer=setTimeout(saveCurrent,550); }
@@ -302,7 +306,8 @@ document.addEventListener('click',async ev=>{const b=ev.target.closest('[data-ac
   else if(a==='updater-dismiss'){updateDismissed=true;render();}
   else if(a==='updater-skip'&&updateInfo?.latest_version){await invoke('updater_skip_version',{version:updateInfo.latest_version});await reload();render();toast('v'+updateInfo.latest_version+' 버전 알림을 건너뜁니다');}
   else if(a==='updater-gen-keypair'){generatedKeyPair=await invoke('updater_generate_keypair');await reload();render();toast('Ed25519 서명 키 쌍이 생성되고 공개키가 등록되었습니다');}
-  else if(a==='updater-build-manifest'){const ver=document.getElementById('manifest-version')?.value||'',url=document.getElementById('manifest-url')?.value||'',notes=document.getElementById('manifest-notes')?.value||'',pk=document.getElementById('manifest-privkey')?.value||'';generatedManifest=await invoke('updater_create_manifest',{version:ver,downloadUrl:url,notes,privateKey:pk});render();toast('latest.json 파일이 실행 파일 폴더에 생성되었습니다');}
+  else if(a==='updater-build-manifest'){const ver=document.getElementById('manifest-version')?.value||'',url=document.getElementById('manifest-url')?.value||'',notes=document.getElementById('manifest-notes')?.value||'',pk=document.getElementById('manifest-privkey')?.value||'';generatedManifest=await invoke('updater_create_manifest',{version:ver,downloadUrl:url,notes,privateKey:pk});render();toast('Niki_Setup.exe 및 latest.json이 실행 파일 폴더에 생성되었습니다');}
+  else if(a==='install-to-pc'){await leave();b.disabled=true;try{toast('PC에 Niki를 설치하고 바로가기를 생성하는 중…');const p=await invoke('install_app_to_pc');await reload();render();toast('설치 완료: '+p);}finally{b.disabled=false;}}
   else if(a==='google-login'){const cid=document.getElementById('drive-client-id')?.value?.trim()||'',sec=document.getElementById('drive-client-secret')?.value||'';if(!cid&&!data.sync_status?.has_oauth_client){const det=document.querySelector('.oauth-details');if(det)det.open=true;document.getElementById('drive-client-id')?.focus();toast('Google Cloud에서 발급받은 OAuth 클라이언트 ID를 먼저 입력해 주세요',true);return;}await startGoogleLogin(cid,sec,b);}
   else if(a==='drive-disconnect'){await invoke('drive_disconnect');visibleSyncKey='';await reload();toast('Google 계정에서 로그아웃되었습니다');render();}
   else if(a==='drive-sync'){await leave();b.disabled=true;try{toast('Google Drive와 암호화 동기화 중…');const res=await invoke('drive_sync_now');await reload();render();const msg='동기화 완료 (업로드 '+res.uploaded_revisions+'건, 다운로드 '+res.downloaded_revisions+'건'+(res.conflicts_created?', 충돌 '+res.conflicts_created+'건':'')+')';toast(res.warnings?.length?msg+' · '+res.warnings[0]:msg, Boolean(res.warnings?.length));}catch(e){await reload();render();throw e;}finally{b.disabled=false;}}

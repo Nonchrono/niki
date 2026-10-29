@@ -1,3 +1,5 @@
+#[path = "installer/mod.rs"]
+mod app_installer;
 #[path = "updater/mod.rs"]
 mod app_updater;
 #[path = "drive/auth.rs"]
@@ -179,6 +181,9 @@ struct Snapshot {
     locked: bool,
     lock_enabled: bool,
     app_version: String,
+    installed_on_pc: bool,
+    running_installed: bool,
+    install_path: String,
     updater_config: app_updater::UpdaterConfig,
     nickname: String,
     journals: Vec<Journal>,
@@ -625,6 +630,11 @@ fn bootstrap(state: State<'_, AppState>) -> Result<Snapshot, String> {
         locked,
         lock_enabled: store.password_hash.is_some(),
         app_version: app_updater::CURRENT_VERSION.to_string(),
+        installed_on_pc: app_installer::is_installed_on_pc(),
+        running_installed: app_installer::is_running_from_installed_location(),
+        install_path: app_installer::installed_exe_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
         updater_config: if locked {
             app_updater::UpdaterConfig::default()
         } else {
@@ -880,6 +890,7 @@ fn updater_create_manifest(
     private_key: String,
 ) -> Result<String, String> {
     ensure_unlocked(&state)?;
+    app_installer::ensure_release_setup_binary();
     let exe_path = std::env::current_exe().map_err(err)?;
     let json = app_updater::sign_file_and_build_manifest(
         &exe_path,
@@ -892,6 +903,21 @@ fn updater_create_manifest(
         let _ = fs::write(dir.join("latest.json"), &json);
     }
     Ok(json)
+}
+
+#[tauri::command]
+async fn install_app_to_pc(state: State<'_, AppState>) -> Result<String, String> {
+    ensure_unlocked(&state)?;
+    let path = tauri::async_runtime::spawn_blocking(|| app_installer::run_installer_ui(true))
+        .await
+        .map_err(err)??;
+    if !app_installer::is_running_from_installed_location() {
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            std::process::exit(0);
+        });
+    }
+    Ok(path.display().to_string())
 }
 
 #[tauri::command]
@@ -1623,6 +1649,25 @@ fn mime_from_path(path: &str) -> String {
 
 pub fn run() {
     app_updater::cleanup_old_executable();
+    app_installer::ensure_release_setup_binary();
+    match app_installer::detect_startup_mode() {
+        app_installer::StartupMode::Install { silent } => {
+            if let Err(e) = app_installer::run_installer_ui(silent)
+                && !silent
+                && !e.contains("취소")
+            {
+                app_installer::error_dialog("Niki 설치 오류", &e);
+            }
+            return;
+        }
+        app_installer::StartupMode::Uninstall => {
+            if let Err(e) = app_installer::run_uninstaller_ui() {
+                app_installer::error_dialog("Niki 제거 오류", &e);
+            }
+            return;
+        }
+        app_installer::StartupMode::NormalApp => {}
+    }
     tauri::Builder::default()
         .setup(|app| {
             let data_dir = match std::env::var_os("NIKI_JOURNAL_DATA_DIR") {
@@ -1674,6 +1719,7 @@ pub fn run() {
             updater_skip_version,
             updater_generate_keypair,
             updater_create_manifest,
+            install_app_to_pc,
             save_journal,
             delete_journal,
             save_entry,
