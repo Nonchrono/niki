@@ -53,16 +53,35 @@ async function autoCheckUpdate() {
     console.warn('Auto update check skipped:', e);
   }
 }
+async function autoSyncDrive() {
+  if(data.locked || !data.sync_status?.connected || data.sync_status?.sync_paused) return;
+  try {
+    await invoke('drive_sync_now');
+    await reload();
+    render();
+  } catch(e) {
+    console.warn('Auto drive sync skipped:', e);
+  }
+}
 async function startGoogleLogin(clientId='', clientSecret='', btn=null) {
   if(btn) btn.disabled = true;
   try {
     toast('브라우저에서 로그인할 Google 계정을 선택하세요…');
-    const newKey = await invoke('drive_connect', {clientId, clientSecret});
-    if(newKey) visibleSyncKey = newKey;
+    await invoke('drive_connect', {clientId, clientSecret});
     await reload();
-    const who = data.sync_status?.account_email || data.sync_status?.account_name || 'Google 계정';
-    toast(newKey ? who + ' 로그인 완료! 새로 생성된 복구 키를 꼭 보관하세요.' : who + ' 계정이 연결되었습니다.');
     render();
+    const who = data.sync_status?.account_email || data.sync_status?.account_name || 'Google 계정';
+    toast(who + ' 연결 완료! Google Drive와 자동 동기화 중…');
+    try {
+      const res = await invoke('drive_sync_now');
+      await reload();
+      render();
+      toast(who + ' 동기화 완료 (업로드 '+res.uploaded_revisions+'건, 다운로드 '+res.downloaded_revisions+'건)');
+    } catch(syncErr) {
+      await reload();
+      render();
+      toast(who + ' 연결됨 · 동기화 안내: ' + syncErr, true);
+    }
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -154,10 +173,9 @@ function renderSyncSettings(pane) {
 
   const syncCard=document.createElement('div');
   syncCard.className='panel-card';
-  syncCard.innerHTML='<h3>암호화 동기화 상태</h3>'
+  syncCard.innerHTML='<h3>동기화 상태</h3>'
     +'<p><strong>계정 상태:</strong> '+esc(accountLabel(s))
-    +' · <strong>복구 키:</strong> '+(s.has_sync_key ? '설정됨' : '미설정')
-    +' · <strong>동기화:</strong> '+(s.sync_paused ? '일시 중지됨' : '활성')+'</p>'
+    +' · <strong>동기화:</strong> '+(s.sync_paused ? '일시 중지됨' : '자동 동기화 활성')+'</p>'
     +'<p><strong>마지막 동기화:</strong> '+esc(timeLabel(s.last_sync_at))
     +' · <strong>전송 대기:</strong> '+(s.pending_upload_count||0)+'건'
     +' · <strong>충돌:</strong> '+(s.conflict_count||0)+'건'
@@ -178,19 +196,6 @@ function renderSyncSettings(pane) {
       +data.sync_conflicts.map(c=>'<div class="panel-card"><p><strong>이 기기:</strong> '+esc(c.local&&!c.local.deleted_at?(c.local.title||'제목 없음')+' — '+c.local.body:'삭제됨')+'</p><p><strong>다른 기기:</strong> '+esc(c.remote&&!c.remote.deleted_at?(c.remote.title||'제목 없음')+' — '+c.remote.body:'삭제됨')+'</p><button class="ghost" data-action="resolve-conflict" data-choice="local" data-id="'+esc(c.id)+'">이 기기 기록 유지</button> <button class="ghost" data-action="resolve-conflict" data-choice="remote" data-id="'+esc(c.id)+'">다른 기기 기록 사용</button></div>').join('');
     pane.appendChild(conflicts);
   }
-
-  const keyCard=document.createElement('div');
-  keyCard.className='panel-card';
-  keyCard.innerHTML='<h3>동기화 복구 키 관리</h3>'
-    +'<p>복구 키를 잃어버리면 Google 계정만으로는 암호화된 기록을 복원할 수 없습니다. 새 PC에서 기록을 복원하려면 기존 복구 키를 입력하세요.</p>'
-    +(visibleSyncKey ? '<p><strong>현재 복구 키:</strong> <code style="user-select:all;word-break:break-all">'+esc(visibleSyncKey)+'</code></p>' : '')
-    +'<input id="drive-recovery-key" placeholder="복원할 64자리 16진수 복구 키 입력">'
-    +'<div class="panel-actions">'
-    +'<button class="ghost" data-action="drive-set-key">복구 키 등록</button>'
-    +'<button class="ghost" data-action="drive-show-key">'+(visibleSyncKey?'복구 키 숨기기':'현재 복구 키 보기')+'</button>'
-    +'<button class="ghost" data-action="drive-generate-key">새 복구 키 생성</button>'
-    +'</div>';
-  pane.appendChild(keyCard);
 }
 function timeline(c=document.getElementById('content')) {
   const entries=filtered(), tags=[...new Set(active().flatMap(e=>e.tags))].sort();
@@ -303,7 +308,7 @@ document.addEventListener('contextmenu',ev=>{
   menu.style.top=Math.max(8,Math.min(ev.clientY,window.innerHeight-rect.height-8))+'px';
 });
 document.addEventListener('click',async ev=>{const b=ev.target.closest('[data-action]');closeContextMenu();if(!b)return;if(b.tagName==='A')ev.preventDefault();const a=b.dataset.action,id=b.dataset.id;try{
-  if(a==='unlock'){await invoke('unlock',{password:document.getElementById('unlock-password').value});await reload();render();autoCheckUpdate();}
+  if(a==='unlock'){await invoke('unlock',{password:document.getElementById('unlock-password').value});await reload();render();autoCheckUpdate();autoSyncDrive();}
   else if(a==='toggle-sidebar'){sidebarCollapsed=!sidebarCollapsed;render();}
   else if(a==='updater-save-config'){const ep=document.getElementById('updater-endpoint')?.value||'',pk=document.getElementById('updater-pubkey')?.value||'',ac=document.getElementById('updater-auto-check')?.checked??true;await invoke('updater_save_config',{endpoint:ep,pubkey:pk,autoCheck:ac});await reload();render();toast('업데이트 서버 설정이 저장되었습니다');}
   else if(a==='updater-check-now'){b.disabled=true;try{toast('업데이트 확인 중…');updateInfo=await invoke('updater_check');updateDismissed=false;render();toast(updateInfo.update_available?'새 버전(v'+updateInfo.latest_version+') 업데이트가 있습니다!':'현재 최신 버전(v'+updateInfo.current_version+')을 사용 중입니다');}finally{b.disabled=false;}}
@@ -376,4 +381,4 @@ document.addEventListener('click',async ev=>{
     document.body.appendChild(popup);
   }catch(e){fail(e);}
 });
-if(window.__TAURI__?.core?.invoke){reload().then(()=>{render();autoCheckUpdate();}).catch(fail);}else app.innerHTML='<div class="empty"><h2>데스크톱 앱에서 열어 주세요</h2></div>';
+if(window.__TAURI__?.core?.invoke){reload().then(()=>{render();autoCheckUpdate();autoSyncDrive();}).catch(fail);}else app.innerHTML='<div class="empty"><h2>데스크톱 앱에서 열어 주세요</h2></div>';

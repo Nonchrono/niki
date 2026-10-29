@@ -208,6 +208,7 @@ struct DriveConfig {
     client_id: String,
     account_email: Option<String>,
     account_name: Option<String>,
+    sync_key: Option<String>,
 }
 
 const DEFAULT_GOOGLE_CLIENT_ID: Option<&str> = option_env!("NIKI_GOOGLE_CLIENT_ID");
@@ -278,6 +279,23 @@ fn save_drive_config(data_dir: &std::path::Path, config: &DriveConfig) -> Result
     fs::rename(&temp, data_dir.join("drive-config.json")).map_err(err)
 }
 
+fn load_local_sync_key(data_dir: &std::path::Path) -> Option<[u8; 32]> {
+    if let Ok(key) = drive_auth::load_sync_key() {
+        return Some(key);
+    }
+    let cfg = load_drive_config(data_dir)?;
+    let encoded = cfg.sync_key.as_deref()?;
+    sync_crypto::decode_recovery_key(encoded).ok()
+}
+
+fn persist_local_sync_key(data_dir: &std::path::Path, key: &[u8; 32]) {
+    let _ = drive_auth::save_sync_key(key);
+    if let Some(mut cfg) = load_drive_config(data_dir) {
+        cfg.sync_key = Some(sync_crypto::encode_recovery_key(key));
+        let _ = save_drive_config(data_dir, &cfg);
+    }
+}
+
 fn connected_client_id(data_dir: &std::path::Path) -> Option<String> {
     let config = load_drive_config(data_dir)?;
     if drive_auth::load_refresh_token(&config.client_id).is_ok() {
@@ -318,7 +336,8 @@ async fn drive_connect(
         return Err("클라이언트 비밀번호가 너무 깁니다".into());
     }
     let data_dir = state.data_dir.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let existing_key = load_local_sync_key(&data_dir);
+    let (generated_key, reset_needed) = tauri::async_runtime::spawn_blocking(move || {
         let secret = if client_secret.is_empty() {
             None
         } else {
@@ -343,30 +362,49 @@ async fn drive_connect(
             ),
             None => (None, None),
         };
-        let generated_key = if drive_auth::load_sync_key().is_err() {
-            let key = sync_crypto::generate_key().map_err(err)?;
-            drive_auth::save_sync_key(&key)?;
-            Some(sync_crypto::encode_recovery_key(&key))
-        } else {
-            None
+        let (active_key, reset_needed) = match drive_transport::DriveClient::new()
+            .and_then(|c| c.ensure_cloud_sync_key(&tokens.access_token, existing_key))
+        {
+            Ok((k, reset)) => (k, reset),
+            Err(_) => (
+                existing_key.unwrap_or(drive_transport::ACCOUNT_ENVELOPE_KEY),
+                false,
+            ),
         };
+        let _ = drive_auth::save_sync_key(&active_key);
+        let encoded_key = sync_crypto::encode_recovery_key(&active_key);
         save_drive_config(
             &data_dir,
             &DriveConfig {
                 client_id,
                 account_email,
                 account_name,
+                sync_key: Some(encoded_key),
             },
         )?;
-        Ok(generated_key)
+        Ok::<(Option<String>, bool), String>((None, reset_needed))
     })
     .await
-    .map_err(err)?;
+    .map_err(err)??;
+    if reset_needed {
+        let _ = mutate(&state, |store| {
+            store.sync_cursor = None;
+            store.seen_remote_objects.clear();
+            store.remote_heads.clear();
+            store.revision_parents.clear();
+            store.sync_base_entries.clear();
+            store.sync_base_journals.clear();
+            store.sync_base_templates.clear();
+            store.media_manifests.clear();
+            store.last_sync_error = None;
+            Ok(())
+        });
+    }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
-    result
+    Ok(generated_key)
 }
 
 #[tauri::command]
@@ -460,14 +498,25 @@ async fn drive_sync_now(state: State<'_, AppState>) -> Result<sync_engine::SyncS
 
     let client_id = connected_client_id(&data_dir)
         .ok_or_else(|| "Google 계정을 먼저 연결하세요".to_string())?;
-    let key = drive_auth::load_sync_key().map_err(|_| {
-        "동기화 복구 키가 설정되지 않았습니다. 복구 키를 생성하거나 입력하세요".to_string()
-    })?;
+    let local_key = load_local_sync_key(&data_dir);
 
     let data_dir_for_task = data_dir.clone();
     let sync_result = tauri::async_runtime::spawn_blocking(move || {
         let token = drive_auth::acquire_access_token(&client_id)?;
         let client = drive_transport::DriveClient::new()?;
+        let (key, reset_needed) = client.ensure_cloud_sync_key(&token, local_key)?;
+        persist_local_sync_key(&data_dir_for_task, &key);
+        if reset_needed {
+            working_store.sync_cursor = None;
+            working_store.seen_remote_objects.clear();
+            working_store.remote_heads.clear();
+            working_store.revision_parents.clear();
+            working_store.sync_base_entries.clear();
+            working_store.sync_base_journals.clear();
+            working_store.sync_base_templates.clear();
+            working_store.media_manifests.clear();
+            working_store.last_sync_error = None;
+        }
         let blobs = sync_media::DriveBlobs {
             client: &client,
             token: &token,
@@ -591,7 +640,7 @@ fn bootstrap(state: State<'_, AppState>) -> Result<Snapshot, String> {
     let has_sync_key = if locked {
         false
     } else {
-        drive_auth::load_sync_key().is_ok()
+        connected || load_local_sync_key(&state.data_dir).is_some()
     };
     let sync_status = if locked {
         SyncStatus::default()

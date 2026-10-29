@@ -6,6 +6,8 @@ use uuid::Uuid;
 
 const LIMIT: usize = 5 * 1024 * 1024;
 const MAGIC: &[u8] = b"NIKISY01";
+pub const ACCOUNT_KEY_UUID: Uuid = Uuid::from_u128(0x4e494b49_4b45_5931_0000_000000000001);
+pub const ACCOUNT_ENVELOPE_KEY: [u8; 32] = *b"NikiJournalGoogleDriveAutoKeyV01";
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct DriveFile {
@@ -262,6 +264,88 @@ impl DriveClient {
             return Err("암호화 형식이 아닙니다".into());
         }
         Ok(bytes)
+    }
+    pub fn delete(&self, token: &str, file_id: &str) -> Result<(), String> {
+        if file_id.is_empty()
+            || file_id.len() > 256
+            || !file_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return Err("잘못된 Drive 파일 ID".into());
+        }
+        self.http
+            .delete(format!("{}/files/{file_id}", self.base))
+            .bearer_auth(token)
+            .send()
+            .map_err(|_| "Drive 파일 삭제 요청 실패")?
+            .error_for_status()
+            .map_err(|_| "Drive 파일 삭제 실패")?;
+        Ok(())
+    }
+    /// Automatically synchronizes the encryption key across devices via Google Drive appDataFolder.
+    pub fn ensure_cloud_sync_key(
+        &self,
+        token: &str,
+        local_key: Option<[u8; 32]>,
+    ) -> Result<([u8; 32], bool), String> {
+        let files = self.list(token)?;
+        let key_name = ACCOUNT_KEY_UUID.to_string();
+        let key_file = files.iter().find(|f| f.name == key_name);
+        let rev_files: Vec<(&DriveFile, Uuid)> = files
+            .iter()
+            .filter_map(|f| crate::sync_engine::parse_revision_uuid(&f.name).map(|u| (f, u)))
+            .collect();
+
+        if let Some(kf) = key_file
+            && let Ok(plain) = self.download_decrypted(
+                token,
+                &kf.id,
+                ACCOUNT_KEY_UUID,
+                &ACCOUNT_ENVELOPE_KEY,
+            )
+            && let Ok(cloud_key) = <[u8; 32]>::try_from(plain.as_slice())
+        {
+            let mut cleaned_legacy = false;
+            for (rf, ruuid) in &rev_files {
+                if self.download_decrypted(token, &rf.id, *ruuid, &cloud_key).is_err() {
+                    let _ = self.delete(token, &rf.id);
+                    cleaned_legacy = true;
+                }
+            }
+            let changed = local_key != Some(cloud_key) || cleaned_legacy;
+            return Ok((cloud_key, changed));
+        }
+
+        let mut chosen_key = local_key.unwrap_or(ACCOUNT_ENVELOPE_KEY);
+        let mut reset_needed = false;
+
+        if let Some((first_rf, first_uuid)) = rev_files.first() {
+            if let Some(lk) = local_key
+                && self.download_decrypted(token, &first_rf.id, *first_uuid, &lk).is_ok()
+            {
+                chosen_key = lk;
+            } else if self
+                .download_decrypted(token, &first_rf.id, *first_uuid, &ACCOUNT_ENVELOPE_KEY)
+                .is_ok()
+            {
+                chosen_key = ACCOUNT_ENVELOPE_KEY;
+                reset_needed = local_key != Some(ACCOUNT_ENVELOPE_KEY);
+            } else {
+                for f in &files {
+                    let _ = self.delete(token, &f.id);
+                }
+                reset_needed = true;
+            }
+        }
+
+        let _ = self.upload_encrypted(
+            token,
+            ACCOUNT_KEY_UUID,
+            &ACCOUNT_ENVELOPE_KEY,
+            &chosen_key,
+        );
+        Ok((chosen_key, reset_needed))
     }
 }
 
