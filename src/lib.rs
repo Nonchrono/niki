@@ -152,6 +152,7 @@ struct Store {
     sync_base_entries: HashMap<String, Entry>,
     sync_base_journals: HashMap<String, Journal>,
     sync_base_templates: HashMap<String, Template>,
+    sync_base_nickname: Option<String>,
     media_manifests: HashMap<String, sync_media::Manifest>,
     seen_remote_objects: HashMap<String, String>,
     remote_heads: HashMap<String, Vec<String>>,
@@ -399,6 +400,7 @@ async fn drive_connect(
             store.sync_base_entries.clear();
             store.sync_base_journals.clear();
             store.sync_base_templates.clear();
+            store.sync_base_nickname = None;
             store.media_manifests.clear();
             store.last_sync_error = None;
             Ok(())
@@ -436,6 +438,7 @@ fn drive_generate_sync_key(state: State<'_, AppState>) -> Result<String, String>
         store.sync_base_entries.clear();
         store.sync_base_journals.clear();
         store.sync_base_templates.clear();
+        store.sync_base_nickname = None;
         store.media_manifests.clear();
         store.last_sync_error = None;
         Ok(())
@@ -464,6 +467,7 @@ fn drive_set_sync_key(state: State<'_, AppState>, recovery_key: String) -> Resul
         store.sync_base_entries.clear();
         store.sync_base_journals.clear();
         store.sync_base_templates.clear();
+        store.sync_base_nickname = None;
         store.media_manifests.clear();
         store.last_sync_error = None;
         Ok(())
@@ -548,6 +552,7 @@ async fn drive_sync_now(state: State<'_, AppState>) -> Result<sync_engine::SyncS
             working_store.sync_base_entries.clear();
             working_store.sync_base_journals.clear();
             working_store.sync_base_templates.clear();
+            working_store.sync_base_nickname = None;
             working_store.media_manifests.clear();
             working_store.last_sync_error = None;
         }
@@ -1371,6 +1376,7 @@ fn export_backup(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<St
     store.sync_base_entries.clear();
     store.sync_base_journals.clear();
     store.sync_base_templates.clear();
+    store.sync_base_nickname = None;
     store.media_manifests.clear();
     store.seen_remote_objects.clear();
     store.remote_heads.clear();

@@ -348,8 +348,8 @@ document.addEventListener('click',async ev=>{const b=ev.target.closest('[data-ac
   else if(a==='new-template'){const name=prompt('템플릿 이름');if(name?.trim()){const body=prompt('템플릿 내용 (Markdown 가능)')??'';await invoke('save_template',{id:null,name,body});await reload();render();}}
   else if(a==='edit-template'){const t=data.templates.find(x=>x.id===id),name=prompt('템플릿 이름',t.name);if(name?.trim()){const body=prompt('템플릿 내용',t.body);if(body!==null){await invoke('save_template',{id,name,body});await reload();render();}}}
   else if(a==='delete-template'&&confirm('템플릿을 삭제할까요?')){await invoke('delete_template',{id});await reload();render();}
-  else if(a==='save-nickname'){const val=document.getElementById('profile-nickname')?.value||'';await invoke('set_nickname',{nickname:val});await reload();render();toast(data.nickname?'별명이 저장되었습니다':'기본 인사말(안녕하세요!)로 설정되었습니다');}
-  else if(a==='clear-nickname'){await invoke('set_nickname',{nickname:''});await reload();render();toast('기본 인사말(안녕하세요!)로 초기화되었습니다');}
+  else if(a==='save-nickname'){const val=document.getElementById('profile-nickname')?.value||'';await invoke('set_nickname',{nickname:val});await reload();render();toast(data.nickname?'별명이 저장되었습니다':'기본 인사말(안녕하세요!)로 설정되었습니다');autoSyncDrive();}
+  else if(a==='clear-nickname'){await invoke('set_nickname',{nickname:''});await reload();render();toast('기본 인사말(안녕하세요!)로 초기화되었습니다');autoSyncDrive();}
   else if(a==='set-password'){await invoke('set_lock_password',{currentPassword:document.getElementById('current-password').value,newPassword:document.getElementById('new-password').value});await reload();render();toast('잠금 설정 저장됨');}
 }catch(e){fail(e);}});
 document.addEventListener('input',ev=>{if(ev.target.id==='search'){const pos=ev.target.selectionStart;search=ev.target.value;timeline();const field=document.getElementById('search');field.focus();field.setSelectionRange(pos,pos);}else if(['entry-title','entry-body','entry-date','entry-tags','entry-location','entry-weather'].includes(ev.target.id))scheduleSave();});

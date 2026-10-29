@@ -46,6 +46,8 @@ pub struct SyncRevision {
     #[serde(default)]
     pub templates: Vec<Template>,
     #[serde(default)]
+    pub nickname: Option<String>,
+    #[serde(default)]
     pub media_manifests: HashMap<String, Manifest>,
 }
 
@@ -83,7 +85,14 @@ pub fn pending_upload_count(store: &Store) -> usize {
         .iter()
         .filter(|t| store.sync_base_templates.get(&t.id) != Some(*t))
         .count();
-    entry_changes + journal_changes + template_changes + store.pending_resolutions.len()
+    let nickname_changes = if store.sync_base_nickname.as_deref() != Some(store.nickname.as_str())
+        && !store.nickname.is_empty()
+    {
+        1
+    } else {
+        0
+    };
+    entry_changes + journal_changes + template_changes + nickname_changes + store.pending_resolutions.len()
 }
 
 fn is_ancestor(
@@ -173,6 +182,21 @@ fn merge_template(store: &mut Store, remote: Template) {
             store.sync_base_templates.insert(remote_t.id, local_t);
         }
         _ => {}
+    }
+}
+
+fn merge_nickname(store: &mut Store, remote: String) {
+    let remote = remote.trim();
+    if remote.chars().count() > 40 {
+        return;
+    }
+    let base = store.sync_base_nickname.as_deref();
+    let local = store.nickname.as_str();
+    if base == Some(local) || local.is_empty() || local != remote {
+        store.nickname = remote.to_string();
+        store.sync_base_nickname = Some(remote.to_string());
+    } else {
+        store.sync_base_nickname = Some(remote.to_string());
     }
 }
 
@@ -362,6 +386,9 @@ pub fn sync_with_transport(
         for t in &rev.templates {
             merge_template(store, t.clone());
         }
+        if let Some(ref nick) = rev.nickname {
+            merge_nickname(store, nick.clone());
+        }
         for (att_id, manifest) in &rev.media_manifests {
             store
                 .media_manifests
@@ -549,7 +576,7 @@ pub fn sync_with_transport(
         save_checkpoint(store)?;
     }
 
-    // 4. Push modified journals and templates
+    // 4. Push modified journals, templates, and nickname
     let dirty_journals: Vec<Journal> = store
         .journals
         .iter()
@@ -562,8 +589,15 @@ pub fn sync_with_transport(
         .filter(|t| store.sync_base_templates.get(&t.id) != Some(*t))
         .cloned()
         .collect();
+    let dirty_nickname = if store.sync_base_nickname.as_deref() != Some(store.nickname.as_str())
+        && !store.nickname.is_empty()
+    {
+        Some(store.nickname.clone())
+    } else {
+        None
+    };
 
-    if !dirty_journals.is_empty() || !dirty_templates.is_empty() {
+    if !dirty_journals.is_empty() || !dirty_templates.is_empty() || dirty_nickname.is_some() {
         let object_id = new_revision_uuid();
         let rev = SyncRevision {
             version: 1,
@@ -575,6 +609,7 @@ pub fn sync_with_transport(
             journal: None,
             journals: dirty_journals.clone(),
             templates: dirty_templates.clone(),
+            nickname: dirty_nickname.clone(),
             media_manifests: HashMap::new(),
         };
         let bytes = serde_json::to_vec(&rev).map_err(err)?;
@@ -587,6 +622,9 @@ pub fn sync_with_transport(
         }
         for t in dirty_templates {
             store.sync_base_templates.insert(t.id.clone(), t);
+        }
+        if let Some(nick) = dirty_nickname {
+            store.sync_base_nickname = Some(nick);
         }
         summary.uploaded_revisions += 1;
         save_checkpoint(store)?;
@@ -649,6 +687,7 @@ fn upload_entry_revision(
         journal: journal.clone(),
         journals: Vec::new(),
         templates: Vec::new(),
+        nickname: None,
         media_manifests: entry_manifests,
     };
     let plain = serde_json::to_vec(&rev).map_err(err)?;
