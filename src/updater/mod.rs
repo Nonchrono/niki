@@ -146,6 +146,9 @@ fn read_runtime_updater_config() -> Option<(String, String)> {
         && let Some(parent) = exe.parent()
     {
         candidates.push(parent.join("updater-config.json"));
+        if let Some(contents) = parent.parent() {
+            candidates.push(contents.join("Resources").join("updater-config.json"));
+        }
     }
     for path in candidates {
         if let Ok(raw) = fs::read_to_string(&path)
@@ -280,17 +283,50 @@ pub fn check_update(saved: &UpdaterConfig) -> Result<UpdateInfo, String> {
     }
 }
 
+fn select_platform_entry(platforms: &HashMap<String, PlatformEntry>) -> PlatformEntry {
+    #[cfg(target_os = "windows")]
+    let keys: &[&str] = &["windows-x86_64", "windows-x86_64-msvc", "windows"];
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let keys: &[&str] = &[
+        "darwin-aarch64",
+        "macos-aarch64",
+        "darwin-universal",
+        "macos-universal",
+        "darwin-x86_64",
+        "macos-x86_64",
+        "macos",
+        "darwin",
+    ];
+
+    #[cfg(all(target_os = "macos", not(target_arch = "aarch64")))]
+    let keys: &[&str] = &[
+        "darwin-x86_64",
+        "macos-x86_64",
+        "darwin-universal",
+        "macos-universal",
+        "darwin-aarch64",
+        "macos-aarch64",
+        "macos",
+        "darwin",
+    ];
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let keys: &[&str] = &["linux-x86_64", "linux"];
+
+    for k in keys {
+        if let Some(entry) = platforms.get(*k) {
+            return entry.clone();
+        }
+    }
+    PlatformEntry::default()
+}
+
 fn parse_manifest_or_release(text: &str, endpoint: &str) -> Result<UpdateInfo, String> {
     if let Ok(manifest) = serde_json::from_str::<LatestManifest>(text)
         && !manifest.version.trim().is_empty()
     {
-        let platform = manifest
-            .platforms
-            .get("windows-x86_64")
-            .or_else(|| manifest.platforms.get("windows-x86_64-msvc"))
-            .or_else(|| manifest.platforms.get("windows"))
-            .cloned()
-            .unwrap_or_default();
+        let platform = select_platform_entry(&manifest.platforms);
 
         let download_url = if !platform.url.is_empty() {
             platform.url
@@ -308,7 +344,8 @@ fn parse_manifest_or_release(text: &str, endpoint: &str) -> Result<UpdateInfo, S
             manifest.sha256
         };
         let clean_ver = manifest.version.trim().trim_start_matches(['v', 'V']).to_string();
-        let update_available = is_newer_version(CURRENT_VERSION, &clean_ver);
+        let update_available = is_newer_version(CURRENT_VERSION, &clean_ver)
+            && (!download_url.is_empty() || manifest.platforms.is_empty());
         return Ok(UpdateInfo {
             current_version: CURRENT_VERSION.to_string(),
             latest_version: clean_ver,
@@ -333,7 +370,17 @@ fn parse_manifest_or_release(text: &str, endpoint: &str) -> Result<UpdateInfo, S
             .iter()
             .find(|a| {
                 let n = a.name.to_ascii_lowercase();
-                n.ends_with(".exe") || n.ends_with(".msi")
+                #[cfg(target_os = "macos")]
+                {
+                    n.ends_with(".dmg")
+                        || n.ends_with(".app.tar.gz")
+                        || n.ends_with(".app.zip")
+                        || ((n.contains("mac") || n.contains("darwin")) && n.ends_with(".zip"))
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    n.ends_with(".exe") || n.ends_with(".msi")
+                }
             });
         let download_url = asset.map(|a| a.browser_download_url.clone()).unwrap_or_default();
         let update_available = is_newer_version(CURRENT_VERSION, &clean_ver) && !download_url.is_empty();
@@ -414,47 +461,231 @@ pub fn download_and_apply_update(saved: &UpdaterConfig) -> Result<String, String
 
     verify_payload(&bytes, &cfg.pubkey, &info.signature, &info.sha256)?;
 
-    let lower_url = info.download_url.to_ascii_lowercase();
-    let is_msi = lower_url.ends_with(".msi");
-    let is_pe = bytes.len() > 64 && &bytes[0..2] == b"MZ";
-    let is_msi_magic = bytes.len() > 8 && bytes[0..4] == [0xD0, 0xCF, 0x11, 0xE0];
-    if !is_pe && !is_msi_magic {
-        return Err("다운로드된 파일이 유효한 Windows 실행/설치 파일이 아닙니다.".into());
+    #[cfg(target_os = "macos")]
+    {
+        return apply_macos_update(&bytes, &info);
     }
 
-    let is_installer = is_msi || lower_url.contains("setup") || lower_url.contains("install");
-    if is_installer {
-        let ext = if is_msi { "msi" } else { "exe" };
-        let temp_path = env::temp_dir().join(format!("niki-update-{}.{ext}", info.latest_version));
-        fs::write(&temp_path, &bytes)
-            .map_err(|e| format!("임시 설치 파일 저장 실패: {e}"))?;
-        if is_msi {
-            Command::new("msiexec")
-                .arg("/i")
-                .arg(&temp_path)
-                .spawn()
-                .map_err(|e| format!("MSI 설치 프로그램 실행 실패: {e}"))?;
-        } else {
-            Command::new(&temp_path)
-                .arg("--silent")
-                .spawn()
-                .map_err(|e| format!("설치 프로그램 실행 실패: {e}"))?;
+    #[cfg(not(target_os = "macos"))]
+    {
+        let lower_url = info.download_url.to_ascii_lowercase();
+        let is_msi = lower_url.ends_with(".msi");
+        let is_pe = bytes.len() > 64 && &bytes[0..2] == b"MZ";
+        let is_msi_magic = bytes.len() > 8 && bytes[0..4] == [0xD0, 0xCF, 0x11, 0xE0];
+        if !is_pe && !is_msi_magic {
+            return Err("다운로드된 파일이 유효한 Windows 실행/설치 파일이 아닙니다.".into());
         }
+
+        let is_installer = is_msi || lower_url.contains("setup") || lower_url.contains("install");
+        if is_installer {
+            let ext = if is_msi { "msi" } else { "exe" };
+            let temp_path = env::temp_dir().join(format!("niki-update-{}.{ext}", info.latest_version));
+            fs::write(&temp_path, &bytes)
+                .map_err(|e| format!("임시 설치 파일 저장 실패: {e}"))?;
+            if is_msi {
+                Command::new("msiexec")
+                    .arg("/i")
+                    .arg(&temp_path)
+                    .spawn()
+                    .map_err(|e| format!("MSI 설치 프로그램 실행 실패: {e}"))?;
+            } else {
+                Command::new(&temp_path)
+                    .arg("--silent")
+                    .spawn()
+                    .map_err(|e| format!("설치 프로그램 실행 실패: {e}"))?;
+            }
+            std::thread::spawn(|| {
+                std::thread::sleep(Duration::from_millis(600));
+                std::process::exit(0);
+            });
+            return Ok(info.latest_version);
+        }
+
+        // Portable / direct executable self-replacement
+        let current_exe = env::current_exe()
+            .map_err(|e| format!("현재 실행 파일 경로를 확인할 수 없습니다: {e}"))?;
+        let new_exe = current_exe.with_extension("exe.new");
+        let old_exe = current_exe.with_extension("exe.old");
+
+        fs::write(&new_exe, &bytes)
+            .map_err(|e| format!("새 실행 파일 기록 실패: {e}"))?;
+        if old_exe.exists() {
+            let _ = fs::remove_file(&old_exe);
+        }
+        fs::rename(&current_exe, &old_exe)
+            .map_err(|e| format!("기존 실행 파일 이름 변경 실패: {e}"))?;
+        if let Err(e) = fs::rename(&new_exe, &current_exe) {
+            let _ = fs::rename(&old_exe, &current_exe);
+            return Err(format!("새 실행 파일 교체 실패: {e}"));
+        }
+
+        Command::new(&current_exe)
+            .spawn()
+            .map_err(|e| format!("업데이트된 앱 재시작 실패: {e}"))?;
+
         std::thread::spawn(|| {
-            std::thread::sleep(Duration::from_millis(600));
+            std::thread::sleep(Duration::from_millis(450));
             std::process::exit(0);
         });
-        return Ok(info.latest_version);
+
+        Ok(info.latest_version)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_macos_target_bundle() -> std::path::PathBuf {
+    if let Ok(cur) = env::current_exe() {
+        let s = cur.to_string_lossy();
+        if let Some(idx) = s.find(".app/Contents/MacOS/") {
+            return std::path::PathBuf::from(&s[..idx + 4]);
+        }
+    }
+    std::path::PathBuf::from("/Applications/Niki.app")
+}
+
+#[cfg(target_os = "macos")]
+fn apply_macos_update(bytes: &[u8], info: &UpdateInfo) -> Result<String, String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let lower_url = info.download_url.to_ascii_lowercase();
+    let is_zip = lower_url.ends_with(".zip") || bytes.starts_with(b"PK\x03\x04");
+    let is_dmg = lower_url.ends_with(".dmg");
+    let is_macho = bytes.len() > 4
+        && matches!(
+            &bytes[0..4],
+            [0xCF, 0xFA, 0xED, 0xFE]
+                | [0xFE, 0xED, 0xFA, 0xCF]
+                | [0xCE, 0xFA, 0xED, 0xFE]
+                | [0xCA, 0xFE, 0xBA, 0xBE]
+        );
+
+    if !is_dmg && !is_zip && !is_macho {
+        return Err("다운로드된 파일이 유효한 macOS 설치 파일(.dmg/.zip)이 아닙니다.".into());
     }
 
-    // Portable / direct executable self-replacement
+    let target_bundle = resolve_macos_target_bundle();
+
+    if is_dmg {
+        let dmg_path = env::temp_dir().join(format!("niki-update-{}.dmg", info.latest_version));
+        let mnt_path = env::temp_dir().join(format!("niki-mnt-{}", info.latest_version));
+        fs::write(&dmg_path, bytes).map_err(|e| format!("임시 DMG 파일 저장 실패: {e}"))?;
+        let _ = fs::create_dir_all(&mnt_path);
+
+        let attach = Command::new("/usr/bin/hdiutil")
+            .args(["attach", "-nobrowse", "-readonly", "-mountpoint"])
+            .arg(&mnt_path)
+            .arg(&dmg_path)
+            .status()
+            .map_err(|e| format!("DMG 마운트 실행 실패: {e}"))?;
+
+        if !attach.success() {
+            return Err("업데이트 DMG 이미지를 마운트하지 못했습니다.".into());
+        }
+
+        let mounted_app = mnt_path.join("Niki.app");
+        let copy_res = if mounted_app.exists() {
+            let _ = fs::remove_dir_all(&target_bundle);
+            Command::new("/usr/bin/ditto")
+                .arg(&mounted_app)
+                .arg(&target_bundle)
+                .status()
+                .map_err(|e| format!("Niki.app 복사 실패: {e}"))
+        } else {
+            Err("DMG 내부에서 Niki.app을 찾을 수 없습니다.".into())
+        };
+
+        let _ = Command::new("/usr/bin/hdiutil")
+            .args(["detach", "-force"])
+            .arg(&mnt_path)
+            .status();
+        let _ = fs::remove_file(&dmg_path);
+
+        let status = copy_res?;
+        if !status.success() {
+            return Err("Applications 폴더로 업데이트 복사 실패".into());
+        }
+
+        let _ = Command::new("/usr/bin/xattr")
+            .args(["-cr"])
+            .arg(&target_bundle)
+            .status();
+
+        Command::new("/usr/bin/open")
+            .args(["-n", "-a"])
+            .arg(&target_bundle)
+            .spawn()
+            .map_err(|e| format!("업데이트된 앱 재시작 실패: {e}"))?;
+
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(500));
+            std::process::exit(0);
+        });
+        return Ok(info.latest_version.clone());
+    }
+
+    if is_zip {
+        let zip_path = env::temp_dir().join(format!("niki-update-{}.zip", info.latest_version));
+        let unzip_dir = env::temp_dir().join(format!("niki-unzip-{}", info.latest_version));
+        let _ = fs::remove_dir_all(&unzip_dir);
+        fs::create_dir_all(&unzip_dir).map_err(|e| e.to_string())?;
+        fs::write(&zip_path, bytes).map_err(|e| format!("임시 ZIP 파일 저장 실패: {e}"))?;
+
+        let status = Command::new("/usr/bin/ditto")
+            .args(["-x", "-k"])
+            .arg(&zip_path)
+            .arg(&unzip_dir)
+            .status()
+            .map_err(|e| format!("ZIP 압축 해제 실패: {e}"))?;
+        let _ = fs::remove_file(&zip_path);
+        if !status.success() {
+            return Err("업데이트 ZIP 압축 해제에 실패했습니다.".into());
+        }
+
+        let extracted_app = unzip_dir.join("Niki.app");
+        if !extracted_app.exists() {
+            return Err("압축 해제된 파일에서 Niki.app을 찾을 수 없습니다.".into());
+        }
+        let _ = fs::remove_dir_all(&target_bundle);
+        let copy_status = Command::new("/usr/bin/ditto")
+            .arg(&extracted_app)
+            .arg(&target_bundle)
+            .status()
+            .map_err(|e| format!("Niki.app 설치 실패: {e}"))?;
+        let _ = fs::remove_dir_all(&unzip_dir);
+        if !copy_status.success() {
+            return Err("Niki.app 교체에 실패했습니다.".into());
+        }
+
+        let _ = Command::new("/usr/bin/xattr")
+            .args(["-cr"])
+            .arg(&target_bundle)
+            .status();
+
+        Command::new("/usr/bin/open")
+            .args(["-n", "-a"])
+            .arg(&target_bundle)
+            .spawn()
+            .map_err(|e| format!("업데이트된 앱 재시작 실패: {e}"))?;
+
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(500));
+            std::process::exit(0);
+        });
+        return Ok(info.latest_version.clone());
+    }
+
+    // Direct Mach-O binary replacement
     let current_exe = env::current_exe()
         .map_err(|e| format!("현재 실행 파일 경로를 확인할 수 없습니다: {e}"))?;
-    let new_exe = current_exe.with_extension("exe.new");
-    let old_exe = current_exe.with_extension("exe.old");
+    let new_exe = current_exe.with_extension("new");
+    let old_exe = current_exe.with_extension("old");
 
-    fs::write(&new_exe, &bytes)
-        .map_err(|e| format!("새 실행 파일 기록 실패: {e}"))?;
+    fs::write(&new_exe, bytes).map_err(|e| format!("새 실행 파일 기록 실패: {e}"))?;
+    if let Ok(meta) = fs::metadata(&new_exe) {
+        let mut perms = meta.permissions();
+        perms.set_mode(0o755);
+        let _ = fs::set_permissions(&new_exe, perms);
+    }
     if old_exe.exists() {
         let _ = fs::remove_file(&old_exe);
     }
@@ -474,7 +705,7 @@ pub fn download_and_apply_update(saved: &UpdaterConfig) -> Result<String, String
         std::process::exit(0);
     });
 
-    Ok(info.latest_version)
+    Ok(info.latest_version.clone())
 }
 
 pub fn generate_signing_keypair() -> Result<SigningKeyPairInfo, String> {
@@ -512,17 +743,26 @@ pub fn sign_file_and_build_manifest(
 
     let clean_ver = version.trim().trim_start_matches(['v', 'V']);
     let pub_date = chrono::Utc::now().to_rfc3339();
+    let entry = serde_json::json!({
+        "url": download_url.trim(),
+        "signature": signature,
+        "sha256": sha256
+    });
+    #[cfg(target_os = "macos")]
+    let platforms = serde_json::json!({
+        "darwin-aarch64": entry.clone(),
+        "darwin-x86_64": entry.clone(),
+        "macos-universal": entry
+    });
+    #[cfg(not(target_os = "macos"))]
+    let platforms = serde_json::json!({
+        "windows-x86_64": entry
+    });
     let manifest = serde_json::json!({
         "version": clean_ver,
         "notes": notes,
         "pub_date": pub_date,
-        "platforms": {
-            "windows-x86_64": {
-                "url": download_url.trim(),
-                "signature": signature,
-                "sha256": sha256
-            }
-        }
+        "platforms": platforms
     });
     serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())
 }

@@ -103,8 +103,16 @@ pub fn authorize(client_id: &str, client_secret: Option<&str>) -> Result<AuthTok
         .args(["url.dll,FileProtocolHandler", auth.as_str()])
         .spawn()
         .map_err(|e| e.to_string())?;
-    #[cfg(not(target_os = "windows"))]
-    return Err("현재 Windows만 지원합니다".into());
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open")
+        .arg(auth.as_str())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    std::process::Command::new("xdg-open")
+        .arg(auth.as_str())
+        .spawn()
+        .map_err(|e| e.to_string())?;
     let deadline = Instant::now() + Duration::from_secs(180);
     let code = loop {
         if Instant::now() >= deadline {
@@ -176,18 +184,106 @@ pub fn authorize(client_id: &str, client_secret: Option<&str>) -> Result<AuthTok
     })
 }
 
-pub fn save_refresh_token(client_id: &str, token: &str) -> Result<(), String> {
-    keyring::Entry::new("Niki Journal Google Drive", client_id)
+#[cfg(target_os = "windows")]
+fn credential_set(service: &str, account: &str, secret: &str) -> Result<(), String> {
+    keyring::Entry::new(service, account)
         .map_err(|e| e.to_string())?
-        .set_password(token)
+        .set_password(secret)
         .map_err(|e| e.to_string())
 }
 
-pub fn load_refresh_token(client_id: &str) -> Result<String, String> {
-    keyring::Entry::new("Niki Journal Google Drive", client_id)
+#[cfg(target_os = "windows")]
+fn credential_get(service: &str, account: &str) -> Result<String, String> {
+    keyring::Entry::new(service, account)
         .map_err(|e| e.to_string())?
         .get_password()
         .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn credential_delete(service: &str, account: &str) -> Result<(), String> {
+    keyring::Entry::new(service, account)
+        .map_err(|e| e.to_string())?
+        .delete_credential()
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn credential_set(service: &str, account: &str, secret: &str) -> Result<(), String> {
+    let output = std::process::Command::new("/usr/bin/security")
+        .args([
+            "add-generic-password",
+            "-U",
+            "-s",
+            service,
+            "-a",
+            account,
+            "-w",
+            secret,
+        ])
+        .output()
+        .map_err(|e| format!("macOS 키체인 실행 실패: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err("macOS 키체인에 자격 증명을 저장하지 못했습니다".into())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn credential_get(service: &str, account: &str) -> Result<String, String> {
+    let output = std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", service, "-a", account, "-w"])
+        .output()
+        .map_err(|e| format!("macOS 키체인 실행 실패: {e}"))?;
+    if output.status.success() {
+        let value = String::from_utf8_lossy(&output.stdout)
+            .trim_end_matches(['\r', '\n'])
+            .to_string();
+        if value.is_empty() {
+            Err("macOS 키체인 항목이 비어 있습니다".into())
+        } else {
+            Ok(value)
+        }
+    } else {
+        Err("macOS 키체인에서 자격 증명을 찾을 수 없습니다".into())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn credential_delete(service: &str, account: &str) -> Result<(), String> {
+    let output = std::process::Command::new("/usr/bin/security")
+        .args(["delete-generic-password", "-s", service, "-a", account])
+        .output()
+        .map_err(|e| format!("macOS 키체인 실행 실패: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err("macOS 키체인에서 자격 증명을 삭제하지 못했습니다".into())
+    }
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+fn credential_set(_service: &str, _account: &str, _secret: &str) -> Result<(), String> {
+    Err("이 운영체제에서는 키체인 저장이 지원되지 않습니다".into())
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+fn credential_get(_service: &str, _account: &str) -> Result<String, String> {
+    Err("이 운영체제에서는 키체인 조회가 지원되지 않습니다".into())
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+fn credential_delete(_service: &str, _account: &str) -> Result<(), String> {
+    Err("이 운영체제에서는 키체인 삭제가 지원되지 않습니다".into())
+}
+
+pub fn save_refresh_token(client_id: &str, token: &str) -> Result<(), String> {
+    credential_set("Niki Journal Google Drive", client_id, token)
+}
+
+pub fn load_refresh_token(client_id: &str) -> Result<String, String> {
+    credential_get("Niki Journal Google Drive", client_id)
 }
 
 pub fn refresh_access_token(
@@ -221,23 +317,16 @@ pub fn refresh_access_token(
 }
 
 pub fn delete_refresh_token(client_id: &str) -> Result<(), String> {
-    keyring::Entry::new("Niki Journal Google Drive", client_id)
-        .map_err(|e| e.to_string())?
-        .delete_credential()
-        .map_err(|e| e.to_string())
+    credential_delete("Niki Journal Google Drive", client_id)
 }
 
 pub fn save_client_secret(client_id: &str, client_secret: &str) -> Result<(), String> {
-    keyring::Entry::new("Niki Journal OAuth Client", client_id)
-        .map_err(|e| e.to_string())?
-        .set_password(client_secret)
-        .map_err(|e| e.to_string())
+    credential_set("Niki Journal OAuth Client", client_id, client_secret)
 }
 
 pub fn load_client_secret(client_id: &str) -> Option<String> {
-    keyring::Entry::new("Niki Journal OAuth Client", client_id)
+    credential_get("Niki Journal OAuth Client", client_id)
         .ok()
-        .and_then(|e| e.get_password().ok())
         .filter(|s| !s.is_empty())
         .or_else(|| {
             std::env::var("NIKI_GOOGLE_CLIENT_SECRET")
@@ -336,16 +425,11 @@ pub fn parse_credentials_json(bytes: &[u8]) -> Result<(String, String), String> 
 
 pub fn save_sync_key(key: &[u8; 32]) -> Result<(), String> {
     let encoded = crate::sync_crypto::encode_recovery_key(key);
-    keyring::Entry::new("Niki Journal Sync Key", "master")
-        .map_err(|e| e.to_string())?
-        .set_password(&encoded)
-        .map_err(|e| e.to_string())
+    credential_set("Niki Journal Sync Key", "master", &encoded)
 }
 
 pub fn load_sync_key() -> Result<[u8; 32], String> {
-    let encoded = keyring::Entry::new("Niki Journal Sync Key", "master")
-        .map_err(|e| e.to_string())?
-        .get_password()
+    let encoded = credential_get("Niki Journal Sync Key", "master")
         .map_err(|_| "동기화 복구 키가 설정되지 않았습니다".to_string())?;
     crate::sync_crypto::decode_recovery_key(&encoded)
 }

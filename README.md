@@ -1,6 +1,6 @@
 # Niki
 
-Windows용 Rust/Tauri 일기 앱입니다. 구독, 광고, 별도 계정 없이 로컬에서 사용할 수 있으며, 선택 시 사용자의 Google Drive(`appDataFolder`)를 통해 종단간 암호화 동기화를 지원합니다. [기능 기획서](docs/DAY_ONE_FREE_APP_PLAN.md)와 [Google Drive 연동 설계](docs/GOOGLE_DRIVE_DESIGN.md)를 함께 제공합니다.
+Windows 및 macOS(MacBook)용 Rust/Tauri 일기 앱입니다. 구독, 광고, 별도 계정 없이 로컬에서 사용할 수 있으며, 선택 시 사용자의 Google Drive(`appDataFolder`)를 통해 종단간 암호화 동기화를 지원합니다. [기능 기획서](docs/DAY_ONE_FREE_APP_PLAN.md)와 [Google Drive 연동 설계](docs/GOOGLE_DRIVE_DESIGN.md)를 함께 제공합니다.
 
 ## 디렉토리 구조
 
@@ -8,11 +8,12 @@ Windows용 Rust/Tauri 일기 앱입니다. 구독, 광고, 별도 계정 없이 
 niki/
 ├── capabilities/          # Tauri 권한 설정
 ├── docs/                  # 기획, 설계, 보안 검토 및 OAuth 설정 문서
-├── icons/                 # 앱 실행 아이콘 (ICO, PNG)
+├── icons/                 # 앱 실행 아이콘 (ICO, ICNS, PNG)
+├── scripts/               # macOS 앱 번들(.app) 및 DMG 빌드 스크립트
 ├── src/                   # Rust 백엔드 소스 코드
 │   ├── archive/           # ZIP/Day One 아카이브 리더 (zip_read.rs)
 │   ├── drive/             # Google OAuth 인증 및 Drive API 전송 (auth.rs, transport.rs)
-│   ├── installer/         # Windows PC 설치/제거 및 바로가기 등록 (mod.rs)
+│   ├── installer/         # Windows/macOS 설치·제거 및 바로가기/Applications 등록 (mod.rs)
 │   ├── sync/              # AES-256-GCM 암호화, 미디어 청크, 3-way 병합 엔진 (crypto.rs, engine.rs, media.rs, merge.rs)
 │   ├── updater/           # Ed25519/SHA-256 검증 기반 자동 업데이터 (mod.rs)
 │   ├── lib.rs             # Tauri 명령 핸들러 및 로컬 저장소 관리
@@ -25,7 +26,9 @@ niki/
 └── updater-config.json    # 자동 업데이트 엔드포인트 설정
 ```
 
-## 실행
+## 실행 및 빌드
+
+### Windows
 
 Rust 1.99 이상과 Windows WebView2 런타임이 필요합니다.
 
@@ -39,7 +42,24 @@ cargo run --offline
 cargo build --release --offline
 ```
 
-실행 파일은 `target/release/niki_journal.exe`입니다. 앱 데이터는 기본적으로 Windows 사용자별 앱 데이터 폴더에 저장됩니다. 개발·테스트에서만 `NIKI_JOURNAL_DATA_DIR` 환경 변수로 저장 위치를 바꿀 수 있습니다.
+실행 파일은 `target/release/niki_journal.exe` (`Niki_Setup.exe`)입니다.
+
+### macOS (MacBook — Apple Silicon & Intel)
+
+macOS 기본 WebKit을 사용하며, 로컬 개발 실행 및 `.app` / `.dmg` 패키징을 지원합니다.
+
+```bash
+# 개발 실행
+cargo run
+
+# 현재 Mac 아키텍처용 Niki.app 및 Niki_macOS.dmg 빌드
+./scripts/build-macos.sh
+
+# Apple Silicon + Intel 통합 유니버설 바이너리 DMG 빌드
+./scripts/build-macos.sh --universal
+```
+
+빌드 완료 시 `target/release/Niki.app` 및 `target/release/Niki_macOS.dmg`가 생성됩니다. 앱 데이터는 각 운영체제의 사용자별 앱 데이터 폴더에 저장되며, 개발·테스트에서는 `NIKI_JOURNAL_DATA_DIR` 환경 변수로 저장 위치를 바꿀 수 있습니다.
 
 ## 현재 제공 기능
 

@@ -9,3 +9,4 @@ drive-config.json
 journal.json
 *.key
 *.pem
+.DS_Store

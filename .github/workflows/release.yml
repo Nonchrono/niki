@@ -19,8 +19,14 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  build-windows:
+    name: Build Windows (x86_64)
     runs-on: windows-latest
+    outputs:
+      tag: ${{ steps.prep.outputs.tag }}
+      version: ${{ steps.prep.outputs.version }}
+      notes: ${{ steps.prep.outputs.notes }}
+      win_sha256: ${{ steps.build.outputs.sha256 }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -46,7 +52,6 @@ jobs:
           $version = $tag.TrimStart("v", "V")
           $notes = if ($env:INPUT_NOTES) { $env:INPUT_NOTES } else { "Niki v$version 업데이트" }
 
-          # 태그 버전과 Cargo.toml / tauri.conf.json 버전을 자동으로 일치시킴
           (Get-Content Cargo.toml -Raw) -replace '(?m)^version\s*=\s*"[^"]+"', "version = `"$version`"" | Set-Content Cargo.toml -Encoding UTF8
           (Get-Content tauri.conf.json -Raw) -replace '"version":\s*"[^"]+"', "`"version`": `"$version`"" | Set-Content tauri.conf.json -Encoding UTF8
 
@@ -65,47 +70,155 @@ jobs:
           "notes=$notes" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Build release installer (Niki_Setup.exe)
+        id: build
         shell: pwsh
         run: |
           Remove-Item Cargo.lock -Force -ErrorAction SilentlyContinue
           cargo build --release
           Copy-Item -Force "target/release/niki_journal.exe" "target/release/Niki_Setup.exe"
+          $sha256 = (Get-FileHash -Path "target/release/Niki_Setup.exe" -Algorithm SHA256).Hash.ToLower()
+          "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      - name: Generate latest.json manifest
-        shell: pwsh
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: target/release/Niki_Setup.exe
+
+  build-macos:
+    name: Build macOS Universal (Apple Silicon + Intel)
+    runs-on: macos-latest
+    outputs:
+      mac_sha256: ${{ steps.build.outputs.sha256 }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain (Universal targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Cache Cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Prepare version and OAuth config
+        shell: bash
         env:
-          TAG: ${{ steps.prep.outputs.tag }}
-          VERSION: ${{ steps.prep.outputs.version }}
-          NOTES: ${{ steps.prep.outputs.notes }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          CLIENT_ID: ${{ secrets.NIKI_GOOGLE_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.NIKI_GOOGLE_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-$REF_NAME}"
+          TAG="$(echo "$TAG" | xargs)"
+          [[ "$TAG" == v* ]] || TAG="v$TAG"
+          VERSION="${TAG#v}"
+          VERSION="${VERSION#V}"
+
+          sed -i '' -E "s/^version[[:space:]]*=[[:space:]]*\"[^\"]+\"/version = \"${VERSION}\"/" Cargo.toml
+          sed -i '' -E "s/\"version\":[[:space:]]*\"[^\"]+\"/\"version\": \"${VERSION}\"/" tauri.conf.json
+
+          if [ -n "${CLIENT_ID:-}" ]; then
+            cat > oauth-client.json <<EOF
+          {
+            "installed": {
+              "client_id": "${CLIENT_ID}",
+              "client_secret": "${CLIENT_SECRET:-}"
+            }
+          }
+          EOF
+          fi
+
+      - name: Build macOS Universal app and DMG (Niki_macOS.dmg)
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f Cargo.lock
+          chmod +x scripts/build-macos.sh
+          ./scripts/build-macos.sh --universal
+          SHA256="$(shasum -a 256 target/release/Niki_macOS.dmg | awk '{print $1}')"
+          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: target/release/Niki_macOS.dmg
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate multi-platform latest.json manifest
+        shell: bash
+        env:
+          TAG: ${{ needs.build-windows.outputs.tag }}
+          VERSION: ${{ needs.build-windows.outputs.version }}
+          NOTES: ${{ needs.build-windows.outputs.notes }}
+          WIN_SHA256: ${{ needs.build-windows.outputs.win_sha256 }}
+          MAC_SHA256: ${{ needs.build-macos.outputs.mac_sha256 }}
           REPO: ${{ github.repository }}
         run: |
-          $sha256 = (Get-FileHash -Path "target/release/Niki_Setup.exe" -Algorithm SHA256).Hash.ToLower()
-          $pubDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-          $downloadUrl = "https://github.com/$($env:REPO)/releases/download/$($env:TAG)/Niki_Setup.exe"
+          set -euo pipefail
+          PUB_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          WIN_URL="https://github.com/${REPO}/releases/download/${TAG}/Niki_Setup.exe"
+          MAC_URL="https://github.com/${REPO}/releases/download/${TAG}/Niki_macOS.dmg"
 
-          $manifest = @{
-            version = $env:VERSION
-            notes = $env:NOTES
-            pub_date = $pubDate
-            platforms = @{
-              "windows-x86_64" = @{
-                url = $downloadUrl
-                signature = ""
-                sha256 = $sha256
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "$NOTES" \
+            --arg pub_date "$PUB_DATE" \
+            --arg win_url "$WIN_URL" \
+            --arg win_sha "$WIN_SHA256" \
+            --arg mac_url "$MAC_URL" \
+            --arg mac_sha "$MAC_SHA256" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $pub_date,
+              platforms: {
+                "windows-x86_64": {
+                  url: $win_url,
+                  signature: "",
+                  sha256: $win_sha
+                },
+                "darwin-aarch64": {
+                  url: $mac_url,
+                  signature: "",
+                  sha256: $mac_sha
+                },
+                "darwin-x86_64": {
+                  url: $mac_url,
+                  signature: "",
+                  sha256: $mac_sha
+                },
+                "macos-universal": {
+                  url: $mac_url,
+                  signature: "",
+                  sha256: $mac_sha
+                }
               }
-            }
-          } | ConvertTo-Json -Depth 5
-
-          Set-Content -Path "target/release/latest.json" -Value $manifest -Encoding UTF8
+            }' > dist/latest.json
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.prep.outputs.tag }}
-          name: Niki ${{ steps.prep.outputs.tag }}
-          body: ${{ steps.prep.outputs.notes }}
+          tag_name: ${{ needs.build-windows.outputs.tag }}
+          name: Niki ${{ needs.build-windows.outputs.tag }}
+          body: ${{ needs.build-windows.outputs.notes }}
           draft: false
           prerelease: false
           files: |
-            target/release/Niki_Setup.exe
-            target/release/latest.json
+            dist/Niki_Setup.exe
+            dist/Niki_macOS.dmg
+            dist/latest.json

@@ -234,15 +234,20 @@ function settings(c) {
 function renderAboutSettings(pane) {
   const cfg = data.updater_config || {};
   const ver = data.app_version || '0.1.0';
+  const isMac = /Mac/i.test(navigator.platform || navigator.userAgent || '');
+  const hostName = isMac ? 'Mac' : 'PC';
+  const installLabel = data.installed_on_pc
+    ? (isMac ? 'Applications 설치본 갱신' : 'PC 설치본 갱신 및 바로가기 재생성')
+    : (isMac ? '이 Mac에 설치하기 (/Applications 등록)' : '이 PC에 설치하기 (바탕화면·시작 메뉴 등록)');
   pane.innerHTML = '<div class="wide-head"><h2>앱 정보</h2></div>'
     +'<div class="panel-card"><h3>Niki v'+esc(ver)+'</h3>'
     +'<p>구독과 광고 없이 로컬에서 사용하며, 선택 시 사용자의 Google Drive(<code>appDataFolder</code>)를 통해 256비트 종단간 암호화 동기화를 지원합니다.</p>'
-    +'<p><strong>PC 설치 상태:</strong> '+(data.running_installed ? '<span class="badge-connected">● PC 설치 버전 실행 중</span>' : data.installed_on_pc ? '설치됨 (현재 빌드 폴더에서 실행 중)' : '미설치')+(data.install_path?'<br><span class="subtle">설치 경로: '+esc(data.install_path)+'</span>':'')+'</p>'
+    +'<p><strong>'+hostName+' 설치 상태:</strong> '+(data.running_installed ? '<span class="badge-connected">● '+hostName+' 설치 버전 실행 중</span>' : data.installed_on_pc ? '설치됨 (현재 빌드 폴더에서 실행 중)' : '미설치')+(data.install_path?'<br><span class="subtle">설치 경로: '+esc(data.install_path)+'</span>':'')+'</p>'
     +(updateInfo ? '<p><strong>최신 확인 버전:</strong> v'+esc(updateInfo.latest_version)+' '+(updateInfo.update_available ? '<span class="badge-connected">업데이트 가능</span>' : '(최신 버전 사용 중)')+(updateInfo.notes?'<br><span class="subtle">'+esc(updateInfo.notes)+'</span>':'')+'</p>' : '')
     +'<div class="panel-actions">'
     +'<button class="ghost" data-action="updater-check-now">지금 업데이트 확인</button>'
     +(updateInfo?.update_available ? '<button class="primary" data-action="updater-install">✨ v'+esc(updateInfo.latest_version)+' 다운로드 및 재시작</button>' : '')
-    +'<button class="ghost" data-action="install-to-pc">'+(data.installed_on_pc?'PC 설치본 갱신 및 바로가기 재생성':'이 PC에 설치하기 (바탕화면·시작 메뉴 등록)')+'</button>'
+    +'<button class="ghost" data-action="install-to-pc">'+installLabel+'</button>'
     +'</div></div>';
   /* [개발자 전용 UI: 업데이트 서버 설정 및 latest.json 매니페스트 생성 도구]
   pane.innerHTML += '<div class="panel-card"><h3>업데이트 서버 설정 (GitHub Releases / 자체 웹 서버)</h3>'
@@ -344,7 +349,7 @@ document.addEventListener('click',async ev=>{const b=ev.target.closest('[data-ac
 }catch(e){fail(e);}});
 document.addEventListener('input',ev=>{if(ev.target.id==='search'){const pos=ev.target.selectionStart;search=ev.target.value;timeline();const field=document.getElementById('search');field.focus();field.setSelectionRange(pos,pos);}else if(['entry-title','entry-body','entry-date','entry-tags','entry-location','entry-weather'].includes(ev.target.id))scheduleSave();});
 document.addEventListener('change',ev=>{if(ev.target.id==='tag-filter'){tag=ev.target.value;timeline();}else if(ev.target.id==='entry-journal')scheduleSave();else if(ev.target.id==='insert-template'&&ev.target.value){const t=data.templates.find(x=>x.id===ev.target.value),body=document.getElementById('entry-body');if(t&&body){body.value=t.body+(body.value?'\n\n'+body.value:'');scheduleSave();}ev.target.value='';}});
-document.addEventListener('keydown',ev=>{if(ev.key==='Escape')closeContextMenu();if(ev.key==='Enter'&&ev.target.id==='unlock-password')document.querySelector('[data-action="unlock"]')?.click();if(ev.key==='Enter'&&ev.target.id==='profile-nickname')document.querySelector('[data-action="save-nickname"]')?.click();if(ev.ctrlKey&&ev.key.toLowerCase()==='n'){ev.preventDefault();newEntry().catch(fail);}if(ev.ctrlKey&&ev.key.toLowerCase()==='s'){ev.preventDefault();saveCurrent().then(()=>toast('저장했습니다'));}});
+document.addEventListener('keydown',ev=>{const mod=ev.ctrlKey||ev.metaKey;if(ev.key==='Escape')closeContextMenu();if(ev.key==='Enter'&&ev.target.id==='unlock-password')document.querySelector('[data-action="unlock"]')?.click();if(ev.key==='Enter'&&ev.target.id==='profile-nickname')document.querySelector('[data-action="save-nickname"]')?.click();if(mod&&ev.key.toLowerCase()==='n'){ev.preventDefault();newEntry().catch(fail);}if(mod&&ev.key.toLowerCase()==='s'){ev.preventDefault();saveCurrent().then(()=>toast('저장했습니다'));}});
 importFile.addEventListener('change',async()=>{const f=importFile.files?.[0];if(!f)return;try{toast('가져오는 중…');const result=await invoke('import_data',{name:f.name,data:await toBase64(f)});await reload();render();toast(result.entries_added+'개 글, '+result.media_added+'개 첨부 가져옴'+(result.warnings.length?' · 경고 '+result.warnings.length+'건':''));if(result.warnings.length)console.warn(result.warnings);}catch(e){fail(e);}finally{importFile.value='';}});
 attachFile.addEventListener('change',async()=>{const id=entryId;if(!id)return;try{await leave();for(const f of attachFile.files||[]){await invoke('add_attachment',{entryId:id,name:f.name,mime:f.type||'application/octet-stream',data:await toBase64(f)});}await reload();editor();toast('첨부 파일 저장됨');}catch(e){fail(e);}finally{attachFile.value='';}});
 document.addEventListener('click',async ev=>{

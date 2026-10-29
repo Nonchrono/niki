@@ -230,6 +230,9 @@ fn load_drive_config(data_dir: &std::path::Path) -> Option<DriveConfig> {
         && let Some(dir) = exe.parent()
     {
         candidates.push(dir.join("oauth-client.json"));
+        if let Some(contents) = dir.parent() {
+            candidates.push(contents.join("Resources").join("oauth-client.json"));
+        }
         if let Some(root) = dir.parent().and_then(|p| p.parent()) {
             candidates.push(root.join("oauth-client.json"));
         }
