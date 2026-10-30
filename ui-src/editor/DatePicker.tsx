@@ -11,7 +11,7 @@ export function DatePicker({ value, onChange }: { value: string; onChange: (date
   const offset = new Date(year, monthIndex, 1).getDay();
   const choose = (date: string) => { onChange(date); setOpen(false); };
   return <span className="date-control">
-    <Button variant="outline" size="xs" className="date-trigger" data-action="date-picker" aria-label="기록 날짜 선택"
+    <Button variant="outline" size="sm" className="date-trigger" data-action="date-picker" aria-label="기록 날짜 선택"
       aria-haspopup="dialog" onClick={() => { setMonth(new Date(`${value}T12:00:00`)); setOpen(!open); }}>
       <CalendarDays size={13} />{dateLabel(value)}<ChevronDown size={12} />
     </Button>

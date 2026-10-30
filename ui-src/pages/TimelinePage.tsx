@@ -39,12 +39,12 @@ export function TimelinePage() {
       <div className="list-head">
         <h2>{date ? dateLabel(date) : name}</h2>
         <div className="subtle">{entries.length}개의 기록 {date && <button className="text-link" data-action="clear-date" onClick={() => setParams({})}>날짜 필터 지우기</button>}</div>
-        <label className="search-wrap list-search"><span><Search size={15} /></span>
-          <Input id="search" className="search" placeholder="기록, 태그, 장소 검색" value={query} onChange={event => setQuery(event.target.value)} />
+        <label className="search-wrap list-search"><span aria-hidden="true"><Search size={15} /></span>
+          <Input id="search" className="search h-9 !pl-10" aria-label="기록, 태그, 장소 검색" placeholder="기록, 태그, 장소 검색" value={query} onChange={event => setQuery(event.target.value)} />
         </label>
       </div>
       <div className="list-controls">
-        <Button variant="outline" size="xs" className={`chip ${favorites ? 'active' : ''}`} data-action="favorites" onClick={() => setFavorites(!favorites)}>
+        <Button variant="outline" size="sm" className={`chip ${favorites ? 'active' : ''}`} data-action="favorites" onClick={() => setFavorites(!favorites)}>
           <Heart size={13} fill={favorites ? 'currentColor' : 'none'} />즐겨찾기
         </Button>
         <NativeSelect size="sm" id="tag-filter" className="filter-select" value={tag} onChange={event => setTag(event.target.value)}>

@@ -174,7 +174,7 @@ export function EntryEditor({ entry }: { entry: Entry }) {
         </NativeSelect>
       </span>
       <span className="inline-flex items-center gap-1"><Tags size={13} />
-        <Input id="entry-tags" className="w-[135px] border-0 bg-transparent px-0 shadow-none focus-visible:ring-0" placeholder="태그, 쉼표 구분"
+        <Input id="entry-tags" className="h-8 w-[135px] border-0 bg-transparent px-0 shadow-none focus-visible:ring-0" placeholder="태그, 쉼표 구분"
           value={tagInput} onChange={event => { setTagInput(event.target.value); updateField('tags', event.target.value.split(',').map(tag => tag.trim()).filter(Boolean)); }} />
       </span>
     </div>

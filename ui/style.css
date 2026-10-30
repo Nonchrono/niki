@@ -394,6 +394,9 @@
   .pr-9 {
     padding-right: calc(var(--spacing) * 9);
   }
+  .\!pl-10 {
+    padding-left: calc(var(--spacing) * 10) !important;
+  }
   .text-base {
     font-size: var(--text-base);
     line-height: var(--tw-leading, var(--text-base--line-height));
@@ -2237,6 +2240,62 @@
   }
   [data-slot="native-select"] {
     background-image: none;
+  }
+  .list-head {
+    padding-bottom: 12px;
+  }
+  .list-search {
+    margin-top: 16px;
+  }
+  .list-search > span {
+    top: 50%;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 16px;
+    pointer-events: none;
+  }
+  .list-controls {
+    align-items: center;
+    gap: 8px;
+    padding: 0 20px 16px;
+  }
+  .list-controls [data-slot="native-select-wrapper"] {
+    flex: none;
+  }
+  .editor-meta {
+    gap: 8px 10px;
+    margin-bottom: 18px;
+  }
+  .editor-meta > span {
+    min-height: 32px;
+  }
+  .editor-meta > span > svg {
+    flex: none;
+  }
+  .toolbar {
+    min-height: 50px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .settings-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .settings-card > h3, .settings-card > p {
+    margin: 0;
+  }
+  .settings-card > input {
+    margin: 0;
+  }
+  .settings-card > .panel-actions {
+    margin-top: 4px;
+  }
+  .settings-card > .account-box, .settings-card > .template-row {
+    margin: 0;
+  }
+  .settings-card > [data-slot="button"] {
+    align-self: flex-start;
   }
 }
 @property --tw-translate-x {
