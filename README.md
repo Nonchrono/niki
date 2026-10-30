@@ -18,8 +18,11 @@ niki/
 │   ├── updater/           # Ed25519/SHA-256 검증 기반 자동 업데이터 (mod.rs)
 │   ├── lib.rs             # Tauri 명령 핸들러 및 로컬 저장소 관리
 │   └── main.rs            # 엔트리포인트
-├── tests/                 # 테스트 픽스처
-├── ui/                    # 프론트엔드 UI (index.html, app.js, style.css, icon.svg)
+├── tests/                 # 브라우저 및 동기화 테스트
+├── ui-src/                # React·TypeScript 화면과 Tiptap 편집기
+│   ├── components/ui/     # shadcn/ui 컴포넌트
+│   └── styles/            # Tailwind 테마와 기존 화면 스타일
+├── ui/                    # 앱에 포함되는 빌드 결과 (index.html, app.js, style.css)
 ├── build.rs               # 빌드 스크립트 (OAuth 및 업데이터 설정 임베딩)
 ├── Cargo.toml             # Rust 패키지 매니페스트
 ├── tauri.conf.json        # Tauri 앱 설정
@@ -98,4 +101,4 @@ npm test
 
 Drive 동기화는 앱 실행 중 저장 후 약 8초, 시작·잠금 해제·네트워크 복구 시, 그리고 Rust 백그라운드 타이머로 5분마다 시도합니다. 앱을 종료한 뒤에는 동기화되지 않습니다. 업로드 전 리비전을 로컬에 저장해 업로드와 체크포인트 저장이 엇갈려도 같은 리비전으로 재시도합니다. 일지·템플릿 삭제는 삭제 리비전으로 전달하며, 동시에 수정된 일지·템플릿은 복사본을 남깁니다. 해독·검증에 실패한 원격 파일은 자동으로 버리지 않고 동기화를 멈춥니다. 설정에서 백업을 확인한 후 해당 파일을 명시적으로 건너뛰거나 나중에 다시 확인할 수 있습니다. 새 동기화 동작을 모든 기기에서 사용하려면 모든 기기를 최신 버전으로 업데이트하세요.
 
-UI는 `ui-src/app`, `ui-src/pages`, `ui-src/editor`, `ui-src/lib`의 React·TypeScript 소스로 관리합니다. 로컬 파일 환경에서 동작하도록 해시 라우팅을 사용하며, 빌드된 `ui/app.js`가 Rust 앱에 포함됩니다. Node.js 22 이상에서 `npm ci`, `npm run build`, `npm test`로 검증합니다. 의존성 라이선스는 `ui/THIRD_PARTY_LICENSES.txt`에 있고, 브라우저 테스트는 Chrome이 필요하며 `CHROME_PATH`로 경로를 지정할 수 있습니다.
+UI는 `ui-src/app`, `ui-src/pages`, `ui-src/editor`, `ui-src/components`, `ui-src/styles`의 React·TypeScript 소스로 관리합니다. 편집기 컴포넌트는 사용 중인 라이브러리에 맞춰 `TiptapEditor.tsx`로 이름을 정했습니다. Tailwind CSS와 shadcn/ui 컴포넌트, Lucide 아이콘은 npm 의존성으로 설치하며, `npm run build`가 esbuild와 PostCSS를 호출해 `ui/app.js`와 `ui/style.css`를 만듭니다. 별도의 Tailwind CLI 실행은 필요하지 않습니다. 로컬 파일 환경에서는 해시 라우팅을 사용합니다. Node.js 22 이상에서 `npm ci`, `npm run build`, `npm test`로 검증합니다. 의존성 라이선스는 `ui/THIRD_PARTY_LICENSES.txt`에 있고, 브라우저 테스트는 Chrome이 필요하며 `CHROME_PATH`로 경로를 지정할 수 있습니다.

@@ -7,14 +7,14 @@ import TaskItem from '@tiptap/extension-task-item';
 import Placeholder from '@tiptap/extension-placeholder';
 import { imageMarkdown, needsSourceEditor, NikiImage } from './markdown';
 
-export interface RichTextHandle {
+export interface TiptapEditorHandle {
   getBody: () => string; format: (kind: string) => void; rememberSelection: () => void;
   insertImage: (id: string, alt: string) => boolean; setEditable: (value: boolean) => void;
   insertTemplate: (text: string) => boolean; source: boolean;
 }
 interface Props { initialBody: string; onChange: () => void; resolveImage: (id: string) => Promise<string> }
 
-export const RichTextEditor = forwardRef<RichTextHandle, Props>(function RichTextEditor({ initialBody, onChange, resolveImage }, ref) {
+export const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(function TiptapEditor({ initialBody, onChange, resolveImage }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const editor = useRef<Editor | null>(null);

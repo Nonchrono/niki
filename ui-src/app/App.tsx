@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AppProvider, useApp } from './AppContext';
 import { AppShell } from './AppShell';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
 import { TimelinePage } from '../pages/TimelinePage';
 import { CalendarPage } from '../pages/CalendarPage';
 import { MediaPage } from '../pages/MediaPage';
@@ -14,7 +16,7 @@ function AppRoutes() {
   const [password, setPassword] = useState('');
   if (!window.__TAURI__?.core) return <div className="empty"><h2>데스크톱 앱에서 열어 주세요</h2></div>;
   if (!data) return <div className="empty">불러오는 중…</div>;
-  if (data.locked) return <div className="lock-page"><div className="lock-card"><img className="brand-mark" src="./icon.svg" alt="" style={{ margin: 'auto' }} /><h2>일기를 다시 열어 주세요</h2><p>잠금 암호를 입력하세요.</p><input id="unlock-password" type="password" placeholder="암호" autoFocus value={password} onChange={event => setPassword(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') document.getElementById('unlock-button')?.click(); }} /><button id="unlock-button" className="primary" data-action="unlock" onClick={() => void action(async () => { await run('unlock', { password }); await refresh(); scheduleSync(0); })}>잠금 해제</button></div></div>;
+  if (data.locked) return <div className="lock-page"><div className="lock-card"><img className="brand-mark" src="./icon.svg" alt="" style={{ margin: 'auto' }} /><h2>일기를 다시 열어 주세요</h2><p>잠금 암호를 입력하세요.</p><Input id="unlock-password" type="password" placeholder="암호" autoFocus value={password} onChange={event => setPassword(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') document.getElementById('unlock-button')?.click(); }} /><Button id="unlock-button" className="primary" data-action="unlock" onClick={() => void action(async () => { await run('unlock', { password }); await refresh(); scheduleSync(0); })}>잠금 해제</Button></div></div>;
   return <Routes>
     <Route element={<AppShell />}>
       <Route index element={<Navigate to="/all" replace />} />

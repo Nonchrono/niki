@@ -4,7 +4,7 @@
   "description": "Niki React desktop interface build and tests",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "npm run typecheck && esbuild ui-src/main.tsx --bundle --minify --format=iife --target=es2020 --supported:template-literal=false --outfile=ui/app.js --legal-comments=none && node scripts/editor-licenses.cjs",
+    "build": "npm run typecheck && node scripts/build-ui.cjs && node scripts/editor-licenses.cjs",
     "test": "node tests/editor.test.cjs && node tests/auto-sync.test.cjs && node tests/navigation.test.cjs"
   },
   "repository": {
@@ -13,22 +13,30 @@
   },
   "type": "commonjs",
   "dependencies": {
+    "@radix-ui/react-slot": "^1.5.0",
     "@tiptap/core": "3.32.1",
     "@tiptap/extension-placeholder": "3.32.1",
     "@tiptap/extension-task-item": "3.32.1",
     "@tiptap/extension-task-list": "3.32.1",
     "@tiptap/markdown": "3.32.1",
     "@tiptap/starter-kit": "3.32.1",
+    "class-variance-authority": "^0.7.1",
+    "cn": "^0.5.1",
+    "lucide-react": "^1.65.0",
     "marked": "17.0.6",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "react-router-dom": "^7.18.5"
+    "react-router-dom": "^7.18.5",
+    "tw-animate-css": "^1.4.0"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "esbuild": "0.28.2",
     "playwright-core": "1.64.1",
+    "postcss": "^8.5.32",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3"
   },
   "private": true

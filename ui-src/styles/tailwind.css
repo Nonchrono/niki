@@ -1,0 +1,62 @@
+@import "tailwindcss" source(none);
+@import "tw-animate-css";
+@source "../";
+@source "../../ui/index.html";
+@import "./legacy.css" layer(components);
+
+:root {
+  --radius: 0.625rem;
+  --background: #f8f8f5;
+  --foreground: #252923;
+  --card: #ffffff;
+  --card-foreground: #25352a;
+  --popover: #ffffff;
+  --popover-foreground: #25352a;
+  --primary: #315e42;
+  --primary-foreground: #ffffff;
+  --secondary: #e9eee8;
+  --secondary-foreground: #314b39;
+  --muted: #eff3ee;
+  --muted-foreground: #718475;
+  --accent: #e7f0e8;
+  --accent-foreground: #244b34;
+  --destructive: #ad5d59;
+  --border: #dfe6dd;
+  --input: #dfe6dd;
+  --ring: #7b9780;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+}
+
+@layer base {
+  body { @apply bg-background text-foreground; }
+}
+
+@layer components {
+  .toolbar .tool { display: inline-flex; align-items: center; justify-content: center; }
+  .toolbar .image-tool { gap: 5px; }
+  .entry-meta span { display: inline-flex; align-items: center; gap: 3px; }
+  [data-slot="native-select"] { background-image: none; }
+}
