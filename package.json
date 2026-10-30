@@ -4,7 +4,7 @@
   "description": "Niki rich text editor build and tests",
   "scripts": {
     "build": "esbuild ui-src/rich-editor.js --bundle --minify --format=iife --target=es2020 --outfile=ui/rich-editor.js --legal-comments=external && node scripts/editor-licenses.cjs",
-    "test": "node tests/editor.test.cjs"
+    "test": "node tests/editor.test.cjs && node tests/auto-sync.test.cjs"
   },
   "repository": {
     "type": "git",

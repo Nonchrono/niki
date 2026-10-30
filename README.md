@@ -1,6 +1,6 @@
 # Niki
 
-Windows 및 macOS(MacBook)용 Rust/Tauri 일기 앱입니다. 구독, 광고, 별도 계정 없이 로컬에서 사용할 수 있으며, 선택 시 사용자의 Google Drive(`appDataFolder`)를 통해 종단간 암호화 동기화를 지원합니다. [Google Drive 연동 설계](docs/GOOGLE_DRIVE_DESIGN.md)를 제공합니다.
+Windows 및 macOS(MacBook)용 Rust/Tauri 일기 앱입니다. 구독, 광고, 별도 계정 없이 로컬에서 사용할 수 있으며, 선택 시 사용자의 Google Drive(`appDataFolder`)를 통해 암호화 동기화를 지원합니다. 동기화 키는 같은 Google Drive 계정에 보관됩니다. [Google Drive 연동 설계](docs/GOOGLE_DRIVE_DESIGN.md)를 제공합니다.
 
 ## 디렉토리 구조
 
@@ -74,7 +74,7 @@ cargo run
 - 사용자 템플릿, 앱 화면 잠금
 - JSON/ZIP 가져오기, 첨부를 포함한 자체 JSON 백업
 - 인쇄 대화상자를 통한 PDF 저장
-- Google Drive(`appDataFolder`) 종단간 암호화(AES-256-GCM) 동기화, 복구 키 백업/복원, 3-way 병합 및 충돌 해결
+- Google Drive(`appDataFolder`) AES-256-GCM 암호화 동기화 및 Google Drive 내 키 자동 보관, 3-way 병합 및 충돌 해결
 - GitHub Releases 및 자체 웹 서버(`latest.json`) 기반 자동 업데이트 알림 및 원클릭 설치
 
 ## 보안 및 문서

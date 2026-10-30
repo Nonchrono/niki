@@ -1,4 +1,9 @@
-const invoke = (name, args = {}) => window.__TAURI__.core.invoke(name, args);
+const syncMutations = new Set(['save_entry','save_entry_checked','save_journal','delete_journal','trash_entry','restore_entry','empty_trash','save_template','delete_template','add_attachment','remove_attachment','import_data','resolve_sync_conflict','set_nickname']);
+const invoke = async (name, args = {}) => {
+  const result=await window.__TAURI__.core.invoke(name,args);
+  if(syncMutations.has(name)) scheduleAutoSync();
+  return result;
+};
 const app = document.getElementById('app');
 const toastBox = document.getElementById('toast');
 const importFile = document.getElementById('import-file');
@@ -19,8 +24,9 @@ const MDI = {
 let data = {locked:false,lock_enabled:false,app_version:'0.1.0',updater_config:{endpoint:'',pubkey:'',auto_check:true,skipped_version:''},journals:[],entries:[],templates:[],sync_conflicts:[],pending_resolution_count:0,sync_status:{},synced_entry_ids:[]};
 let journal = 'all', entryId = null, view = 'timeline', search = '', tag = '', favorites = false, dateFilter = '';
 let month = new Date(new Date().getFullYear(),new Date().getMonth(),1);
-let saveTimer = null, savePromise = null, saveDirty = false, richEditor = null, visibleSyncKey = '', settingsTab = 'sync', sidebarCollapsed = false;
+let saveTimer = null, savePromise = null, saveDirty = false, richEditor = null, editingEntry = null, saveConflict = false, visibleSyncKey = '', settingsTab = 'sync', sidebarCollapsed = false;
 let updateInfo = null, updateDismissed = false, generatedKeyPair = null, generatedManifest = '';
+let syncTimer=null, syncRunning=false, syncQueued=false, retryDelay=15000, draftWarningShown=false;
 const media = new Map();
 const esc = value => String(value ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const localDate = () => { const d=new Date(); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10); };
@@ -54,17 +60,52 @@ async function autoCheckUpdate() {
     console.warn('Auto update check skipped:', e);
   }
 }
-async function autoSyncDrive() {
-  if(data.locked || !data.sync_status?.connected || data.sync_status?.sync_paused) return;
+function syncAvailable() { return !data.locked && data.sync_status?.connected && !data.sync_status?.sync_paused; }
+function scheduleAutoSync(delay=8000) {
+  if(!syncAvailable()) return;
+  if(syncRunning){syncQueued=true;return;}
+  clearTimeout(syncTimer);
+  syncTimer=setTimeout(()=>{syncTimer=null;autoSyncDrive();},delay);
+}
+function updateSyncIndicator(label) {
+  document.querySelectorAll('[data-action="drive-sync"]').forEach(button=>{
+    if(button.closest('.topbar')) button.textContent=label;
+  });
+}
+async function autoSyncDrive(manual=false) {
+  if(!syncAvailable()) return;
+  if(syncRunning){syncQueued=true;return;}
+  clearTimeout(syncTimer);syncTimer=null;syncRunning=true;syncQueued=false;
+  let failed=false;
   try {
-    await invoke('drive_sync_now');
+    await leave();
+    updateSyncIndicator('↻ 동기화 중');
+    const result=await invoke('drive_sync_now');
     await leave();
     await reload();
-    render();
+    retryDelay=15000;
+    const editing=document.querySelector('.editor-inner')?.contains(document.activeElement);
+    if(!editing && !saveDirty) render();
+    else updateSyncIndicator(data.sync_conflicts?.length?'⚠ 확인 필요':'✓ 동기화됨');
+    if(manual) toast(result.warnings?.length?result.warnings[0]:'동기화가 완료되었습니다',Boolean(result.warnings?.length));
   } catch(e) {
-    console.warn('Auto drive sync skipped:', e);
+    failed=true;
+    try { await reload(); } catch(reloadError) { console.warn('Sync status refresh failed:',reloadError); }
+    const editing=document.querySelector('.editor-inner')?.contains(document.activeElement);
+    if(!editing && !saveDirty) render();
+    updateSyncIndicator('⚠ 확인 필요');
+    if(manual) throw e;
+    console.warn('Auto sync failed:',e);
+  } finally {
+    syncRunning=false;
+    if(syncAvailable() && !saveConflict && (failed || syncQueued)) {
+      scheduleAutoSync(failed ? retryDelay : 8000);
+      if(failed) retryDelay=Math.min(retryDelay*2,300000);
+    }
   }
 }
+window.addEventListener('online',()=>scheduleAutoSync(1000));
+setInterval(()=>scheduleAutoSync(0),300000);
 async function startGoogleLogin(clientId='', clientSecret='', btn=null) {
   if(btn) btn.disabled = true;
   try {
@@ -75,10 +116,7 @@ async function startGoogleLogin(clientId='', clientSecret='', btn=null) {
     const who = data.sync_status?.account_email || data.sync_status?.account_name || 'Google 계정';
     toast(who + ' 연결 완료! Google Drive와 자동 동기화 중…');
     try {
-      const res = await invoke('drive_sync_now');
-      await reload();
-      render();
-      toast(who + ' 동기화 완료 (업로드 '+res.uploaded_revisions+'건, 다운로드 '+res.downloaded_revisions+'건)');
+      await autoSyncDrive(true);
     } catch(syncErr) {
       await reload();
       render();
@@ -176,6 +214,7 @@ function renderSyncSettings(pane) {
   syncCard.className='panel-card';
   syncCard.innerHTML='<h3>동기화 상태 <span class="sync-badge '+(s.sync_paused?'paused':'')+'">'+(s.sync_paused?'일시 중지':'자동 동기화')+'</span></h3>'
     +'<p><strong>계정 상태:</strong> '+esc(accountLabel(s))+'</p>'
+    +'<p>동기화 키는 이 Google Drive 계정에 자동 보관됩니다. 같은 계정의 모든 기기를 최신 버전으로 업데이트해 주세요.</p>'
     +'<p><strong>마지막 동기화:</strong> '+esc(timeLabel(s.last_sync_at))
     +'</p>'
     +(s.last_sync_error ? '<p style="color:#b42318"><strong>최근 오류:</strong> '+esc(s.last_sync_error)+'</p>' : '')
@@ -206,8 +245,10 @@ function editor() {
   if(!e||e.deleted_at) { pane.innerHTML='<div class="empty" style="height:100%"><div class="empty-art">✎</div><h2>오늘을 기록해 보세요</h2><p>작은 순간도 시간이 지나면 소중한 이야기가 됩니다.</p><button class="primary" data-action="new-entry">＋ 새 기록 쓰기</button></div>'; return; }
   pane.innerHTML='<div class="editor-inner"><div class="editor-top"><span class="status" id="save-status">모든 변경 사항 저장됨'+esc(entrySyncBadge(e.id))+'</span><span class="spacer"></span><button class="icon-button" data-action="favorite-entry" title="즐겨찾기">'+(e.favorite?'♥':'♡')+'</button><button class="ghost" data-action="print">인쇄 / PDF</button><button class="icon-button" data-action="entry-menu" title="기록 메뉴" aria-label="기록 메뉴" aria-haspopup="menu">⋯</button></div><input class="editor-title" id="entry-title" placeholder="제목 없는 기록" value="'+esc(e.title)+'"><div class="editor-meta"><span class="date-control"><input id="entry-date" type="hidden" value="'+esc(e.date)+'"><button class="date-trigger" data-action="date-picker" aria-label="기록 날짜 선택" aria-haspopup="dialog">◷ ' +esc(dateLabel(e.date))+' ▾</button><span id="date-picker"></span></span><span>◈ <select id="entry-journal" aria-label="일기장">'+data.journals.map(j=>'<option value="'+esc(j.id)+'" '+(j.id===e.journal_id?'selected':'')+'>'+esc(j.name)+'</option>').join('')+'</select></span><span>⌗ <input id="entry-tags" placeholder="태그, 쉼표 구분" value="'+esc(e.tags.join(', '))+'"></span></div><div class="toolbar" aria-label="본문 서식">'+[['bold','B','굵게'],['italic','I','기울임'],['heading','H','제목'],['quote','❞','인용'],['list','☷','글머리 목록'],['check','☑','체크리스트']].map(x=>'<button class="tool" data-action="format" data-format="'+x[0]+'" title="'+x[2]+'" aria-label="'+x[2]+'">'+x[1]+'</button>').join('')+'<span class="tool sep"></span><button class="tool" data-action="attach" title="첨부" aria-label="첨부">📎</button><select id="insert-template" class="filter-select" aria-label="템플릿 삽입"><option value="">템플릿</option>'+data.templates.map(t=>'<option value="'+esc(t.id)+'">'+esc(t.name)+'</option>').join('')+'</select></div><div id="entry-body"></div>'+'<div class="attach-grid">'+e.attachments.map(a=>'<div class="attach-tile" id="att-'+esc(a.id)+'"><span>'+esc(a.name)+'</span><button data-action="remove-attachment" data-id="'+esc(a.id)+'" title="삭제">×</button></div>').join('')+'</div><div class="extra-fields"><label>장소<input id="entry-location" placeholder="장소" value="'+esc(e.location)+'"></label><label>날씨 / 메모<input id="entry-weather" placeholder="날씨" value="'+esc(e.weather)+'"></label></div></div>';
   if(richEditor) richEditor.destroy();
+  editingEntry=structuredClone(e);saveConflict=false;
   richEditor=window.NikiEditor.create(document.getElementById('entry-body'),e.body,scheduleSave);
   if(richEditor.source) pane.querySelectorAll('[data-action="format"]').forEach(button=>button.disabled=true);
+  restoreEditorDraft(e,pane);
   e.attachments.filter(a=>a.mime.startsWith('image/')).forEach(async a=>{try{const url=await getMedia(a.id), box=document.getElementById('att-'+a.id); if(box){const img=document.createElement('img');img.src=url;img.alt=a.name;box.prepend(img);}}catch(x){console.warn(x);}});
 }
 let pickerMonth = null;
@@ -287,7 +328,7 @@ function renderAboutSettings(pane) {
     : (isMac ? '이 Mac에 설치하기 (/Applications 등록)' : '이 PC에 설치하기 (바탕화면·시작 메뉴 등록)');
   pane.innerHTML = '<div class="wide-head"><h2>앱 정보</h2></div>'
     +'<div class="panel-card"><h3>Niki v'+esc(ver)+'</h3>'
-    +'<p>구독과 광고 없이 로컬에서 사용하며, 선택 시 사용자의 Google Drive(<code>appDataFolder</code>)를 통해 256비트 종단간 암호화 동기화를 지원합니다.</p>'
+    +'<p>구독과 광고 없이 로컬에서 사용하며, 선택 시 사용자의 Google Drive(<code>appDataFolder</code>)를 통해 암호화 동기화를 지원합니다. 동기화 키는 같은 Google Drive 계정에 보관됩니다.</p>'
     +'<div class="panel-actions">'
     +'<button class="ghost" data-action="updater-check-now">지금 업데이트 확인</button>'
     +(updateInfo?.update_available ? '<button class="primary" data-action="updater-install">✨ v'+esc(updateInfo.latest_version)+' 다운로드 및 재시작</button>' : '')
@@ -314,11 +355,36 @@ function renderAboutSettings(pane) {
     +'</div></details></div>';
   */
 }
-function entryInput() { const e=selected(); if(!e) return null; return {id:e.id,journalId:document.getElementById('entry-journal')?.value||e.journal_id,title:document.getElementById('entry-title')?.value??e.title,body:richEditor?.getBody()??e.body,date:document.getElementById('entry-date')?.value||e.date,favorite:document.querySelector('[data-action="favorite-entry"]')?.textContent==='♥',tags:(document.getElementById('entry-tags')?.value||e.tags.join(',')).split(',').map(x=>x.trim()).filter(Boolean),location:document.getElementById('entry-location')?.value??e.location,weather:document.getElementById('entry-weather')?.value??e.weather}; }
+function entryInput() { const e=selected(); if(!e) return null; return {id:e.id,expectedEntry:editingEntry,journalId:document.getElementById('entry-journal')?.value||e.journal_id,title:document.getElementById('entry-title')?.value??e.title,body:richEditor?.getBody()??e.body,date:document.getElementById('entry-date')?.value||e.date,favorite:document.querySelector('[data-action="favorite-entry"]')?.textContent==='♥',tags:(document.getElementById('entry-tags')?.value||e.tags.join(',')).split(',').map(x=>x.trim()).filter(Boolean),location:document.getElementById('entry-location')?.value??e.location,weather:document.getElementById('entry-weather')?.value??e.weather}; }
+const draftKey=id=>'niki.editor.draft.'+id;
+function persistEditorDraft() {
+  const input=entryInput();if(!input?.id)return;
+  try { localStorage.setItem(draftKey(input.id),JSON.stringify(input)); }
+  catch(e) { if(!draftWarningShown){draftWarningShown=true;toast('편집 내용의 임시 저장에 실패했습니다. 앱을 닫기 전에 저장 상태를 확인하세요.',true);} }
+}
+function clearEditorDraft(id) { try { localStorage.removeItem(draftKey(id)); } catch(e) { console.warn('Draft cleanup failed:',e); } }
+function restoreEditorDraft(e,pane) {
+  let draft;
+  try { const raw=localStorage.getItem(draftKey(e.id));if(!raw)return;draft=JSON.parse(raw); }
+  catch(error) { console.warn('Draft could not be read:',error);return; }
+  if(!draft || draft.id!==e.id || typeof draft.body!=='string' || !draft.expectedEntry) return;
+  if(!confirm('이 기록에 저장되지 않은 편집 내용이 있습니다. 복원할까요? 취소하면 임시 편집 내용이 삭제됩니다.')) { clearEditorDraft(e.id);return; }
+  for(const [id,value] of [['entry-title',draft.title],['entry-tags',(draft.tags||[]).join(', ')],['entry-location',draft.location],['entry-weather',draft.weather],['entry-date',draft.date],['entry-journal',draft.journalId]]) {
+    const field=document.getElementById(id);if(field && typeof value==='string')field.value=value;
+  }
+  const trigger=pane.querySelector('.date-trigger');if(trigger && draft.date)trigger.textContent='◷ '+dateLabel(draft.date)+' ▾';
+  const favorite=pane.querySelector('[data-action="favorite-entry"]');if(favorite)favorite.textContent=draft.favorite?'♥':'♡';
+  richEditor.destroy();document.getElementById('entry-body').replaceChildren();
+  editingEntry=draft.expectedEntry;
+  richEditor=window.NikiEditor.create(document.getElementById('entry-body'),draft.body,scheduleSave);
+  pane.querySelectorAll('[data-action="format"]').forEach(button=>button.disabled=richEditor.source);
+  scheduleSave();
+}
 function scheduleSave() {
   saveDirty=true;
   const status=document.getElementById('save-status');
   if(status) status.textContent='저장 대기 중…';
+  persistEditorDraft();
   clearTimeout(saveTimer);
   saveTimer=setTimeout(()=>{saveCurrent();},550);
 }
@@ -333,13 +399,20 @@ async function saveCurrent() {
     if(status) status.textContent='저장 중…';
     savePromise=(async()=>{
       try {
-        await invoke('save_entry',{input});
+        const saved=await invoke('save_entry_checked',{input});
+        editingEntry=saved.entry;
+        if(saveDirty)persistEditorDraft();else clearEditorDraft(input.id);
         await reload();
         if(status) status.textContent='모든 변경 사항 저장됨'+entrySyncBadge(input.id);
         return true;
       } catch(e) {
         saveDirty=true; fail(e);
-        if(status) status.textContent='저장 실패';
+        saveConflict=String(e).includes('다른 기기에서 이 기록이 변경');
+        if(status) status.textContent=saveConflict?'기록이 변경되어 저장할 수 없습니다':'저장 실패';
+        if(saveConflict && !document.querySelector('[data-action="save-draft-copy"]')) {
+          const copy=document.createElement('button');copy.className='ghost';copy.dataset.action='save-draft-copy';copy.textContent='내 편집 내용 별도 저장';
+          document.querySelector('.editor-top')?.appendChild(copy);
+        }
         return false;
       }
     })();
@@ -387,8 +460,8 @@ document.addEventListener('click',async ev=>{const b=ev.target.closest('[data-ac
   else if(a==='install-to-pc'){await leave();b.disabled=true;try{toast('PC에 Niki를 설치하고 바로가기를 생성하는 중…');const p=await invoke('install_app_to_pc');await reload();render();toast('설치 완료: '+p);}finally{b.disabled=false;}}
   else if(a==='google-login'){const cid=document.getElementById('drive-client-id')?.value?.trim()||'',sec=document.getElementById('drive-client-secret')?.value||'';if(!cid&&!data.sync_status?.has_oauth_client){const det=document.querySelector('.oauth-details');if(det)det.open=true;document.getElementById('drive-client-id')?.focus();toast('Google Cloud에서 발급받은 OAuth 클라이언트 ID를 먼저 입력해 주세요',true);return;}await startGoogleLogin(cid,sec,b);}
   else if(a==='drive-disconnect'){await invoke('drive_disconnect');visibleSyncKey='';await reload();toast('Google 계정에서 로그아웃되었습니다');render();}
-  else if(a==='drive-sync'){await leave();b.disabled=true;try{toast('Google Drive와 암호화 동기화 중…');const res=await invoke('drive_sync_now');await reload();render();const msg='동기화 완료 (업로드 '+res.uploaded_revisions+'건, 다운로드 '+res.downloaded_revisions+'건'+(res.conflicts_created?', 충돌 '+res.conflicts_created+'건':'')+')';toast(res.warnings?.length?msg+' · '+res.warnings[0]:msg, Boolean(res.warnings?.length));}catch(e){await reload();render();throw e;}finally{b.disabled=false;}}
-  else if(a==='drive-toggle-pause'){await invoke('drive_set_paused',{paused:!data.sync_status?.sync_paused});await reload();render();toast(data.sync_status?.sync_paused?'동기화가 일시 중지되었습니다':'동기화가 재개되었습니다');}
+  else if(a==='drive-sync'){b.disabled=true;try{await autoSyncDrive(true);}finally{b.disabled=false;}}
+  else if(a==='drive-toggle-pause'){await invoke('drive_set_paused',{paused:!data.sync_status?.sync_paused});await reload();render();toast(data.sync_status?.sync_paused?'동기화가 일시 중지되었습니다':'동기화가 재개되었습니다');if(!data.sync_status?.sync_paused)scheduleAutoSync(0);}
   else if(a==='drive-show-key'){if(visibleSyncKey){visibleSyncKey='';render();}else{const k=await invoke('drive_get_sync_key');if(!k)toast('설정된 복구 키가 없습니다. 먼저 생성하거나 입력하세요',true);else{visibleSyncKey=k;render();}}}
   else if(a==='drive-generate-key'){if(!data.sync_status?.has_sync_key||confirm('새 복구 키를 생성하면 기존 원격 암호화 파일과 키가 달라집니다. 계속할까요?')){visibleSyncKey=await invoke('drive_generate_sync_key');await reload();render();toast('새 복구 키가 생성되었습니다. 안전한 곳에 보관하세요');}}
   else if(a==='drive-set-key'){const val=document.getElementById('drive-recovery-key')?.value||'';await invoke('drive_set_sync_key',{recoveryKey:val});visibleSyncKey='';await reload();render();toast('복구 키가 등록되었습니다');}
@@ -402,6 +475,14 @@ document.addEventListener('click',async ev=>{const b=ev.target.closest('[data-ac
   else if(a==='calendar-day'){dateFilter=b.dataset.date;view='timeline';render();}
   else if(a==='prev-month'||a==='next-month'||a==='today-month'){month=a==='today-month'?new Date(new Date().getFullYear(),new Date().getMonth(),1):new Date(month.getFullYear(),month.getMonth()+(a==='next-month'?1:-1),1);calendar(document.getElementById('content'));}
   else if(a==='favorite-entry'){const e=selected();e.favorite=b.textContent!=='♥';b.textContent=e.favorite?'♥':'♡';scheduleSave();}
+  else if(a==='save-draft-copy'&&saveConflict){
+    clearTimeout(saveTimer);saveTimer=null;
+    const input=entryInput();if(!input)throw new Error('저장할 편집 내용을 찾을 수 없습니다');
+    input.id=null;input.expectedEntry=null;
+    const oldId=entryId;const newId=await invoke('save_entry',{input});
+    clearEditorDraft(oldId);saveDirty=false;saveConflict=false;entryId=newId;
+    await reload();render();toast('편집 내용을 별도 기록으로 저장했습니다');
+  }
   else if(a==='format')format(b.dataset.format);
   else if(a==='attach')attachFile.click(); else if(a==='print'){await leave();window.print();}
   else if(a==='entry-menu'){openEntryMenu(b);}

@@ -55,6 +55,14 @@ jobs:
       - name: Cache Cargo registry and target
         uses: Swatinem/rust-cache@v2
 
+      - name: Test storage, migration and sync
+        shell: pwsh
+        run: |
+          cargo test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Prepare version and OAuth config
         id: prep
         shell: pwsh

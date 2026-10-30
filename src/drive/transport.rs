@@ -23,6 +23,14 @@ pub fn derive_account_sync_key(email: &str) -> [u8; 32] {
     key
 }
 
+// Namespaced files are ignored by legacy clients, including their cleanup pass.
+pub const V2_PREFIX: &str = "niki-v2-";
+pub const V2_KEY_UUID: Uuid = Uuid::from_u128(0x4e494b49_4b45_5932_0000_000000000002);
+pub fn v2_name(id: Uuid) -> String { format!("{V2_PREFIX}{id}") }
+pub fn decode_v2_name(name: &str) -> Option<String> {
+    name.strip_prefix(V2_PREFIX).and_then(|part| Uuid::parse_str(part).ok()).map(|id| id.to_string())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct DriveFile {
     pub id: String,
@@ -75,13 +83,22 @@ pub trait RemoteTransport: crate::sync_media::BlobStore {
 
 impl RemoteTransport for crate::sync_media::DriveBlobs<'_> {
     fn list(&self) -> Result<Vec<DriveFile>, String> {
-        self.client.list(self.token)
+        let files = self.client.list(self.token)?;
+        Ok(if self.v2 { files.into_iter().filter_map(|mut f| { f.name=decode_v2_name(&f.name)?; Some(f) }).collect() } else { files })
     }
     fn start_cursor(&self) -> Result<String, String> {
         self.client.start_cursor(self.token)
     }
     fn changes(&self, cursor: &str) -> Result<ChangeBatch, String> {
-        self.client.changes(self.token, cursor)
+        let mut batch=self.client.changes(self.token, cursor)?;
+        if self.v2 {
+            for change in &mut batch.changes {
+                if let Some(file) = &mut change.file {
+                    file.name=decode_v2_name(&file.name).unwrap_or_default();
+                }
+            }
+        }
+        Ok(batch)
     }
 }
 
@@ -217,13 +234,20 @@ impl DriveClient {
         let ciphertext = crate::sync_crypto::encrypt(key, object_id.to_string().as_bytes(), plain)?;
         self.upload(token, object_id, &ciphertext)
     }
+    pub fn upload_v2_encrypted(&self, token: &str, object_id: Uuid, key: &[u8; 32], plain: &[u8]) -> Result<DriveFile, String> {
+        let ciphertext = crate::sync_crypto::encrypt(key, object_id.to_string().as_bytes(), plain)?;
+        self.upload_named(token, &v2_name(object_id), &ciphertext)
+    }
     fn upload(&self, token: &str, object_id: Uuid, ciphertext: &[u8]) -> Result<DriveFile, String> {
+        self.upload_named(token, &object_id.to_string(), ciphertext)
+    }
+    fn upload_named(&self, token: &str, name: &str, ciphertext: &[u8]) -> Result<DriveFile, String> {
         if ciphertext.len() > LIMIT || !ciphertext.starts_with(MAGIC) {
             return Err("암호화된 파일만 5 MiB 이하로 업로드할 수 있습니다".into());
         }
         let boundary = format!("niki_{}", Uuid::new_v4().simple());
         let metadata =
-            serde_json::json!({"name": object_id.to_string(), "parents": ["appDataFolder"]});
+            serde_json::json!({"name": name, "parents": ["appDataFolder"]});
         let mut body = format!("--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{metadata}\r\n--{boundary}\r\nContent-Type: application/octet-stream\r\n\r\n").into_bytes();
         body.extend_from_slice(ciphertext);
         body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
@@ -279,23 +303,28 @@ impl DriveClient {
         }
         Ok(bytes)
     }
-    pub fn delete(&self, token: &str, file_id: &str) -> Result<(), String> {
-        if file_id.is_empty()
-            || file_id.len() > 256
-            || !file_id
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        {
-            return Err("잘못된 Drive 파일 ID".into());
-        }
-        self.http
-            .delete(format!("{}/files/{file_id}", self.base))
-            .bearer_auth(token)
-            .send()
-            .map_err(|_| "Drive 파일 삭제 요청 실패")?
-            .error_for_status()
-            .map_err(|_| "Drive 파일 삭제 실패")?;
-        Ok(())
+    /// The key is stored in the account's private Drive folder. Its wrapping key
+    /// is part of the app, so this is account-protected, not end-to-end secrecy.
+    pub fn account_v2_key(&self, token: &str) -> Result<[u8; 32], String> {
+        let name=v2_name(V2_KEY_UUID);
+        let find = |files: Vec<DriveFile>| -> Result<Option<DriveFile>, String> {
+            let found: Vec<_>=files.into_iter().filter(|f| f.name==name).collect();
+            if found.len()>1 { return Err("동기화 키가 여러 개 발견되어 자동 선택을 중단했습니다".into()); }
+            Ok(found.into_iter().next())
+        };
+        let files=self.list(token)?;
+        let has_v2_data=files.iter().any(|f| f.name.starts_with(V2_PREFIX) && f.name!=name);
+        let file=match find(files)? {
+            Some(file)=>file,
+            None=>{
+                if has_v2_data { return Err("동기화 키가 없지만 암호화된 기록이 남아 있어 새 키를 만들지 않았습니다".into()); }
+                let key=crate::sync_crypto::generate_key().map_err(str::to_string)?;
+                self.upload_v2_encrypted(token,V2_KEY_UUID,&ACCOUNT_ENVELOPE_KEY,&key)?;
+                find(self.list(token)?)?.ok_or("생성한 동기화 키를 찾을 수 없습니다")?
+            }
+        };
+        let bytes=self.download_decrypted(token,&file.id,V2_KEY_UUID,&ACCOUNT_ENVELOPE_KEY)?;
+        bytes.try_into().map_err(|_| "동기화 키의 길이가 올바르지 않습니다".into())
     }
     /// Automatically synchronizes the encryption key across devices via Google Drive appDataFolder.
     pub fn ensure_cloud_sync_key(
@@ -311,40 +340,26 @@ impl DriveClient {
             .filter_map(|f| crate::sync_engine::parse_revision_uuid(&f.name).map(|u| (f, u)))
             .collect();
 
-        let mut key_file_matches = false;
         if let Some(kf) = key_file {
-            if let Ok(plain) = self.download_decrypted(
+            let plain = self.download_decrypted(
                 token,
                 &kf.id,
                 ACCOUNT_KEY_UUID,
                 &ACCOUNT_ENVELOPE_KEY,
-            ) {
-                if plain.as_slice() == canonical_key.as_slice() {
-                    key_file_matches = true;
-                }
+            )?;
+            if plain.as_slice() != canonical_key.as_slice() {
+                return Err("동기화 키가 기존 원격 데이터의 키와 다릅니다. 원격 데이터는 변경하지 않았습니다".into());
             }
-            if !key_file_matches {
-                let _ = self.delete(token, &kf.id);
-            }
-        }
-        if !key_file_matches {
-            let _ = self.upload_encrypted(
-                token,
-                ACCOUNT_KEY_UUID,
-                &ACCOUNT_ENVELOPE_KEY,
-                &canonical_key,
-            );
+        } else if rev_files.is_empty() {
+            self.upload_encrypted(token, ACCOUNT_KEY_UUID, &ACCOUNT_ENVELOPE_KEY, &canonical_key)?;
         }
 
-        let mut cleaned_legacy = false;
-        for (rf, ruuid) in &rev_files {
-            if self.download_decrypted(token, &rf.id, *ruuid, &canonical_key).is_err() {
-                let _ = self.delete(token, &rf.id);
-                cleaned_legacy = true;
-            }
+        // A download or decryption error may be transient or indicate a different key.
+        // Never delete remote revisions in either case.
+        for (rf, ruuid) in rev_files {
+            self.download_decrypted(token, &rf.id, ruuid, &canonical_key)?;
         }
-
-        Ok(cleaned_legacy)
+        Ok(false)
     }
 }
 
@@ -375,6 +390,15 @@ mod tests {
     }
 
     #[test]
+    fn v2_names_do_not_match_legacy_revision_names() {
+        let revision=crate::sync_engine::new_revision_uuid();
+        let name=v2_name(revision);
+        assert!(crate::sync_engine::parse_revision_uuid(&name).is_none());
+        assert_eq!(decode_v2_name(&name).as_deref(), Some(revision.to_string().as_str()));
+        assert!(decode_v2_name(&revision.to_string()).is_none());
+    }
+
+    #[test]
     fn enforces_size_and_requires_ciphertext() {
         assert!(read_limited(&b"12345"[..], 4).is_err());
         assert_eq!(read_limited(&b"1234"[..], 4).unwrap(), b"1234");
@@ -385,6 +409,89 @@ mod tests {
                 .is_err()
         );
         assert!(client.download("unused", "../other").is_err());
+    }
+
+    #[test]
+    #[ignore = "requires loopback socket access"]
+    fn v2_missing_or_duplicate_key_never_creates_a_replacement() {
+        for duplicate in [false, true] {
+            let listener=TcpListener::bind("127.0.0.1:0").unwrap();
+            let base=format!("http://{}",listener.local_addr().unwrap());
+            let server=thread::spawn(move || {
+                let (mut stream,_)=listener.accept().unwrap();let mut request=[0u8;4096];
+                let n=stream.read(&mut request).unwrap();assert!(String::from_utf8_lossy(&request[..n]).starts_with("GET "));
+                let name=if duplicate {v2_name(V2_KEY_UUID)} else {v2_name(crate::sync_engine::new_revision_uuid())};
+                let body=if duplicate {format!("{{\"files\":[{{\"id\":\"a\",\"name\":\"{name}\"}},{{\"id\":\"b\",\"name\":\"{name}\"}}]}}")}
+                    else {format!("{{\"files\":[{{\"id\":\"a\",\"name\":\"{name}\"}}]}}")};
+                write!(stream,"HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+            });
+            let mut client=DriveClient::new().unwrap();client.http=reqwest::blocking::Client::builder().no_proxy().build().unwrap();client.base=base.clone();client.upload_base=base;
+            assert!(client.account_v2_key("test-token").is_err());server.join().unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "requires loopback socket access"]
+    fn v2_key_is_generated_once_and_read_on_another_device() {
+        let listener=TcpListener::bind("127.0.0.1:0").unwrap();
+        let base=format!("http://{}",listener.local_addr().unwrap());
+        let server=thread::spawn(move || {
+            let mut stored=Vec::new();
+            for i in 0..6 {
+                let (mut stream,_)=listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut request=Vec::new();let mut buf=[0;4096];
+                let end=loop {let n=stream.read(&mut buf).unwrap();assert!(n>0);request.extend_from_slice(&buf[..n]);if let Some(p)=request.windows(4).position(|w|w==b"\r\n\r\n"){break p+4;}};
+                let header=String::from_utf8_lossy(&request[..end]).into_owned();
+                let len=header.lines().find_map(|l|l.to_ascii_lowercase().strip_prefix("content-length: ").and_then(|x|x.parse::<usize>().ok())).unwrap_or(0);
+                while request.len()<end+len {let n=stream.read(&mut buf).unwrap();assert!(n>0);request.extend_from_slice(&buf[..n]);}
+                let body=match i {
+                    0=>b"{\"files\":[]}".to_vec(),
+                    1=>{assert!(header.starts_with("POST "));let payload=&request[end..];let start=payload.windows(MAGIC.len()).position(|w|w==MAGIC).unwrap();let stop=payload[start..].windows(9).position(|w|w==b"\r\n--niki_").unwrap()+start;stored=payload[start..stop].to_vec();format!("{{\"id\":\"key2\",\"name\":\"{}\"}}",v2_name(V2_KEY_UUID)).into_bytes()},
+                    2|4=>format!("{{\"files\":[{{\"id\":\"key2\",\"name\":\"{}\"}}]}}",v2_name(V2_KEY_UUID)).into_bytes(),
+                    _=>stored.clone(),
+                };
+                write!(stream,"HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();stream.write_all(&body).unwrap();
+            }
+        });
+        let mut client=DriveClient::new().unwrap();client.http=reqwest::blocking::Client::builder().no_proxy().build().unwrap();client.base=base.clone();client.upload_base=base;
+        let first=client.account_v2_key("test-token").unwrap();
+        let second=client.account_v2_key("test-token").unwrap();
+        assert_eq!(first,second);assert_ne!(first,ACCOUNT_ENVELOPE_KEY);
+        server.join().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires loopback socket access"]
+    fn key_mismatch_does_not_delete_remote_objects() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let ciphertext = crate::sync_crypto::encrypt(
+            &ACCOUNT_ENVELOPE_KEY,
+            ACCOUNT_KEY_UUID.to_string().as_bytes(),
+            &[7u8; 32],
+        ).unwrap();
+        let server = thread::spawn(move || {
+            for index in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                let n = stream.read(&mut request).unwrap();
+                let header = String::from_utf8_lossy(&request[..n]);
+                assert!(header.starts_with("GET "), "unexpected remote mutation: {header}");
+                let body = if index == 0 {
+                    format!("{{\"files\":[{{\"id\":\"key1\",\"name\":\"{}\"}}]}}", ACCOUNT_KEY_UUID).into_bytes()
+                } else { ciphertext.clone() };
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                stream.write_all(&body).unwrap();
+            }
+        });
+        let mut client = DriveClient::new().unwrap();
+        client.http = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+        client.base = base.clone();
+        client.upload_base = base;
+        let error = client.ensure_cloud_sync_key("test-token", [8u8; 32]).unwrap_err();
+        assert!(error.contains("원격 데이터는 변경하지 않았습니다"));
+        server.join().unwrap();
     }
 
     #[test]

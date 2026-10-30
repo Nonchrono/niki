@@ -1,4 +1,4 @@
-//! End-to-end encrypted Google Drive synchronization engine.
+//! Encrypted Google Drive synchronization engine.
 
 use crate::{
     Entry, Journal, Store, SyncConflict, Template,
@@ -290,7 +290,24 @@ pub fn sync_with_transport(
     store: &mut Store,
     data_dir: &Path,
     transport: &impl RemoteTransport,
+    save_checkpoint: impl FnMut(&Store) -> Result<(), String>,
+) -> Result<SyncSummary, String> {
+    sync_impl(store,data_dir,transport,save_checkpoint,false)
+}
+pub fn pull_legacy_with_transport(
+    store: &mut Store,
+    data_dir: &Path,
+    transport: &impl RemoteTransport,
+    save_checkpoint: impl FnMut(&Store) -> Result<(), String>,
+) -> Result<SyncSummary, String> {
+    sync_impl(store,data_dir,transport,save_checkpoint,true)
+}
+fn sync_impl(
+    store: &mut Store,
+    data_dir: &Path,
+    transport: &impl RemoteTransport,
     mut save_checkpoint: impl FnMut(&Store) -> Result<(), String>,
+    pull_only: bool,
 ) -> Result<SyncSummary, String> {
     if store.device_id.is_empty() {
         store.device_id = Uuid::new_v4().to_string();
@@ -539,6 +556,9 @@ pub fn sync_with_transport(
     // Commit cursor only after all pulled revisions and media have been applied
     store.sync_cursor = Some(next_cursor);
     save_checkpoint(store)?;
+    // Migration may finish explicitly chosen conflict resolutions on legacy
+    // devices, but must not upload other new edits with the old key.
+    if pull_only && (!store.sync_conflicts.is_empty() || store.pending_resolutions.is_empty()) { return Ok(summary); }
 
     // 2. Push pending conflict resolutions
     let resolutions = std::mem::take(&mut store.pending_resolutions);
@@ -555,6 +575,8 @@ pub fn sync_with_transport(
             save_checkpoint(store)?;
         }
     }
+
+    if pull_only { return Ok(summary); }
 
     // 3. Push modified local entries (skipping any entry with an unresolved conflict)
     let conflicted_ids: HashSet<String> = store
@@ -795,6 +817,60 @@ mod tests {
         }
     }
 
+    struct ScopedMock<'a>(MockClient<'a>);
+    impl BlobStore for ScopedMock<'_> {
+        fn put(&self, id: Uuid, bytes: &[u8]) -> Result<String, String> {
+            let file_id=self.0.put(id, bytes)?;
+            let mut cloud=self.0.cloud.borrow_mut();
+            let name=crate::drive_transport::v2_name(id);
+            cloud.files.last_mut().unwrap().1=name.clone();
+            cloud.changes.last_mut().unwrap().file.as_mut().unwrap().name=name;
+            Ok(file_id)
+        }
+        fn get(&self, id: Uuid, file_id: &str) -> Result<Vec<u8>, String> { self.0.get(id,file_id) }
+    }
+    impl RemoteTransport for ScopedMock<'_> {
+        fn list(&self) -> Result<Vec<DriveFile>, String> {
+            Ok(self.0.list()?.into_iter().filter_map(|mut f| {f.name=crate::drive_transport::decode_v2_name(&f.name)?;Some(f)}).collect())
+        }
+        fn start_cursor(&self) -> Result<String, String> { self.0.start_cursor() }
+        fn changes(&self, cursor: &str) -> Result<ChangeBatch, String> {
+            let mut batch=self.0.changes(cursor)?;
+            for change in &mut batch.changes { if let Some(f)=&mut change.file {f.name=crate::drive_transport::decode_v2_name(&f.name).unwrap_or_default();} }
+            Ok(batch)
+        }
+    }
+
+    #[test]
+    fn migrated_entries_and_media_restore_on_another_device_without_touching_legacy() {
+        let cloud=RefCell::new(MockCloud::default());
+        let legacy=MockClient {cloud:&cloud,key:crate::drive_transport::derive_account_sync_key("test@example.com")};
+        let shared_key=sync_crypto::generate_key().unwrap();
+        let v2=ScopedMock(MockClient {cloud:&cloud,key:shared_key});
+        let dir_a=temp_device_dir("migration-a");let dir_b=temp_device_dir("migration-b");
+        let journal=Journal::default();let attachment_id=Uuid::new_v4().to_string();
+        let bytes=b"\x89PNG\r\n\x1a\nimage";
+        fs::write(dir_a.join("media").join(&attachment_id),bytes).unwrap();
+        let entry=Entry {journal_id:journal.id.clone(),body:"**기존 기록**".into(),attachments:vec![Attachment {id:attachment_id.clone(),name:"photo.png".into(),mime:"image/png".into(),bytes:bytes.len()}],..Entry::default()};
+        let mut a=Store {journals:vec![journal],entries:vec![entry.clone()],..Store::default()};
+        sync_with_transport(&mut a,&dir_a,&legacy,|_|Ok(())).unwrap();
+        let legacy_count=cloud.borrow().files.len();
+        a.entries[0].body="**이전 후 새 편집**".into();
+        crate::prepare_v2_migration(&mut a,&dir_a,&legacy,"test@example.com",||Ok(()),|_|Ok(())).unwrap();
+        assert_eq!(cloud.borrow().files.len(),legacy_count);
+        assert_eq!(a.sync_format,2);
+        assert_eq!(a.sync_account.as_deref(),Some("test@example.com"));
+        sync_with_transport(&mut a,&dir_a,&v2,|_|Ok(())).unwrap();
+        assert!(cloud.borrow().files.len()>legacy_count);
+        assert!(cloud.borrow().files.iter().skip(legacy_count).all(|(_,name,_)|crate::sync_engine::parse_revision_uuid(name).is_none()));
+        let mut b=Store::default();
+        sync_with_transport(&mut b,&dir_b,&v2,|_|Ok(())).unwrap();
+        assert_eq!(b.entries[0].body,"**이전 후 새 편집**");
+        assert_eq!(fs::read(dir_b.join("media").join(attachment_id)).unwrap(),bytes);
+        assert_eq!(cloud.borrow().files.iter().take(legacy_count).count(),legacy_count);
+        fs::remove_dir_all(dir_a).unwrap();fs::remove_dir_all(dir_b).unwrap();
+    }
+
     fn temp_device_dir(label: &str) -> std::path::PathBuf {
         let dir = std::env::current_dir()
             .unwrap()
@@ -802,6 +878,57 @@ mod tests {
             .join(format!("sync-test-{label}-{}", Uuid::new_v4()));
         fs::create_dir_all(dir.join("media")).unwrap();
         dir
+    }
+
+    #[test]
+    fn migration_does_not_switch_keys_while_conflicts_remain() {
+        let cloud=RefCell::new(MockCloud::default());
+        let legacy=MockClient {cloud:&cloud,key:[3u8;32]};
+        let dir=temp_device_dir("migration-conflict");
+        let mut store=Store {sync_conflicts:vec![SyncConflict {id:"conflict".into(),entry_id:"entry".into(),local:None,remote:None}],..Store::default()};
+        let called=std::cell::Cell::new(false);
+        let result=crate::prepare_v2_migration(&mut store,&dir,&legacy,"account",||{called.set(true);Ok(())},|_|Ok(()));
+        assert!(result.is_err());assert!(!called.get());assert_eq!(store.sync_format,0);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn concurrent_local_edit_is_preserved_and_conflicts_on_retry() {
+        let cloud = RefCell::new(MockCloud::default());
+        let client = MockClient { cloud: &cloud, key: sync_crypto::generate_key().unwrap() };
+        let dir_a = temp_device_dir("race-a");
+        let dir_b = temp_device_dir("race-b");
+        let journal = Journal::default();
+        let entry = Entry { journal_id: journal.id.clone(), body: "original".into(), ..Entry::default() };
+        let mut a = Store { journals: vec![journal], entries: vec![entry], ..Store::default() };
+        sync_with_transport(&mut a, &dir_a, &client, |_| Ok(())).unwrap();
+        let mut b = Store::default();
+        sync_with_transport(&mut b, &dir_b, &client, |_| Ok(())).unwrap();
+        a.entries[0].body = "remote edit".into();
+        sync_with_transport(&mut a, &dir_a, &client, |_| Ok(())).unwrap();
+
+        let live = std::sync::Mutex::new(b.clone());
+        let mut base = serde_json::to_value(&b).unwrap();
+        let mut edited = false;
+        let result = sync_with_transport(&mut b, &dir_b, &client, |checkpoint| {
+            if !edited {
+                edited = true;
+                let mut store = live.lock().unwrap();
+                store.entries[0].body = "local edit".into();
+                fs::write(dir_b.join("journal.json"), serde_json::to_vec(&*store).unwrap()).unwrap();
+            }
+            crate::commit_sync_checkpoint(&live, &dir_b, &mut base, checkpoint)
+        });
+        assert!(result.is_err());
+        let persisted: Store = serde_json::from_slice(&fs::read(dir_b.join("journal.json")).unwrap()).unwrap();
+        assert_eq!(persisted.entries[0].body, "local edit");
+        let mut retry = live.into_inner().unwrap();
+        sync_with_transport(&mut retry, &dir_b, &client, |_| Ok(())).unwrap();
+        assert_eq!(retry.entries[0].body, "local edit");
+        assert_eq!(retry.sync_conflicts.len(), 1);
+        assert_eq!(retry.sync_conflicts[0].remote.as_ref().unwrap().body, "remote edit");
+        fs::remove_dir_all(dir_a).unwrap();
+        fs::remove_dir_all(dir_b).unwrap();
     }
 
     #[test]

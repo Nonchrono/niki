@@ -26,7 +26,7 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -149,6 +149,8 @@ struct Store {
     last_sync_at: Option<String>,
     last_sync_error: Option<String>,
     sync_paused: bool,
+    sync_format: u8,
+    sync_account: Option<String>,
     sync_base_entries: HashMap<String, Entry>,
     sync_base_journals: HashMap<String, Journal>,
     sync_base_templates: HashMap<String, Template>,
@@ -198,7 +200,7 @@ struct Snapshot {
 
 struct AppState {
     data_dir: PathBuf,
-    store: Mutex<Store>,
+    store: Arc<Mutex<Store>>,
     unlocked: AtomicBool,
     syncing: AtomicBool,
 }
@@ -289,14 +291,20 @@ fn load_local_sync_key(data_dir: &std::path::Path) -> Option<[u8; 32]> {
     sync_crypto::decode_recovery_key(encoded).ok()
 }
 
-fn persist_local_sync_key(data_dir: &std::path::Path, key: &[u8; 32]) {
-    let _ = drive_auth::save_sync_key(key);
-    if let Some(mut cfg) = load_drive_config(data_dir) {
-        cfg.sync_key = Some(sync_crypto::encode_recovery_key(key));
-        let _ = save_drive_config(data_dir, &cfg);
+fn select_legacy_key(
+    client: &drive_transport::DriveClient,
+    token: &str,
+    preferred: [u8; 32],
+    existing: Option<[u8; 32]>,
+) -> Result<[u8; 32], String> {
+    match client.ensure_cloud_sync_key(token, preferred) {
+        Ok(_) => Ok(preferred),
+        Err(first) => match existing.filter(|key| *key != preferred) {
+            Some(key) => client.ensure_cloud_sync_key(token, key).map(|_| key),
+            None => Err(first),
+        },
     }
 }
-
 fn connected_client_id(data_dir: &std::path::Path) -> Option<String> {
     let config = load_drive_config(data_dir)?;
     if drive_auth::load_refresh_token(&config.client_id).is_ok() {
@@ -363,19 +371,14 @@ async fn drive_connect(
             ),
             None => (None, None),
         };
-        let active_key = if let Some(ref email) = account_email {
+        let preferred_key = if let Some(ref email) = account_email {
             drive_transport::derive_account_sync_key(email)
         } else {
             existing_key.unwrap_or(drive_transport::ACCOUNT_ENVELOPE_KEY)
         };
-        let mut reset_needed = existing_key != Some(active_key);
-        if let Ok(client) = drive_transport::DriveClient::new() {
-            if let Ok(cleaned) = client.ensure_cloud_sync_key(&tokens.access_token, active_key) {
-                if cleaned {
-                    reset_needed = true;
-                }
-            }
-        }
+        let client = drive_transport::DriveClient::new()?;
+        let active_key=select_legacy_key(&client,&tokens.access_token,preferred_key,existing_key)?;
+        let reset_needed = existing_key != Some(active_key);
         let _ = drive_auth::save_sync_key(&active_key);
         let encoded_key = sync_crypto::encode_recovery_key(&active_key);
         save_drive_config(
@@ -509,7 +512,9 @@ async fn drive_sync_now(state: State<'_, AppState>) -> Result<sync_engine::SyncS
     let local_key = load_local_sync_key(&data_dir);
 
     let data_dir_for_task = data_dir.clone();
+    let live_store = Arc::clone(&state.store);
     let sync_result = tauri::async_runtime::spawn_blocking(move || {
+        let mut checkpoint_base = serde_json::to_value(&working_store).map_err(err)?;
         let token = drive_auth::acquire_access_token(&client_id)?;
         let mut cfg = load_drive_config(&data_dir_for_task);
         let mut account_email = cfg.as_ref().and_then(|c| c.account_email.clone());
@@ -530,62 +535,36 @@ async fn drive_sync_now(state: State<'_, AppState>) -> Result<sync_engine::SyncS
             }
         }
 
-        let key = if let Some(ref email) = account_email {
-            drive_transport::derive_account_sync_key(email)
-        } else {
-            local_key.unwrap_or(drive_transport::ACCOUNT_ENVELOPE_KEY)
-        };
-
-        let mut reset_needed = local_key != Some(key);
+        let account=account_email.as_ref().filter(|email| !email.trim().is_empty()).ok_or("Google 계정 이메일을 확인할 수 없어 동기화를 중단했습니다")?.trim().to_ascii_lowercase();
+        if working_store.sync_format == 2 && working_store.sync_account.as_deref()!=Some(account.as_str()) {
+            return Err("기존 동기화 계정과 다른 Google 계정입니다. 기록을 보호하기 위해 동기화를 중단했습니다".into());
+        }
         let client = drive_transport::DriveClient::new()?;
-        if let Ok(cleaned) = client.ensure_cloud_sync_key(&token, key) {
-            if cleaned {
-                reset_needed = true;
-            }
+        if working_store.sync_format == 0 {
+            let legacy_key = if let Some(ref email) = account_email {
+                drive_transport::derive_account_sync_key(email)
+            } else {
+                local_key.unwrap_or(drive_transport::ACCOUNT_ENVELOPE_KEY)
+            };
+            let legacy_key=select_legacy_key(&client,&token,legacy_key,local_key)?;
+            if local_key != Some(legacy_key) { reset_sync_tracking(&mut working_store); }
+            let legacy = sync_media::DriveBlobs { client: &client, token: &token, key: &legacy_key, v2: false };
+            prepare_v2_migration(&mut working_store, &data_dir_for_task, &legacy, &account,
+                || client.account_v2_key(&token).map(|_| ()),
+                |checkpoint| commit_sync_checkpoint(&live_store, &data_dir_for_task, &mut checkpoint_base, checkpoint))?;
         }
-        persist_local_sync_key(&data_dir_for_task, &key);
-        if reset_needed {
-            working_store.sync_cursor = None;
-            working_store.seen_remote_objects.clear();
-            working_store.remote_heads.clear();
-            working_store.revision_parents.clear();
-            working_store.sync_base_entries.clear();
-            working_store.sync_base_journals.clear();
-            working_store.sync_base_templates.clear();
-            working_store.sync_base_nickname = None;
-            working_store.media_manifests.clear();
-            working_store.last_sync_error = None;
-        }
-        let blobs = sync_media::DriveBlobs {
-            client: &client,
-            token: &token,
-            key: &key,
-        };
-        let summary = sync_engine::sync_with_transport(
-            &mut working_store,
-            &data_dir_for_task,
-            &blobs,
-            |checkpoint| {
-                let json = serde_json::to_vec_pretty(checkpoint).map_err(err)?;
-                let dest = data_dir_for_task.join("journal.json");
-                let temp = data_dir_for_task.join("journal.json.tmp");
-                fs::write(&temp, json).map_err(err)?;
-                fs::rename(&temp, &dest).map_err(err)?;
-                Ok(())
-            },
-        )?;
-        Ok::<(Store, sync_engine::SyncSummary), String>((working_store, summary))
+        if working_store.sync_format != 2 { return Err("지원하지 않는 동기화 형식입니다".into()); }
+        let key=client.account_v2_key(&token)?;
+        let blobs=sync_media::DriveBlobs { client: &client, token: &token, key: &key, v2: true };
+        let summary=sync_engine::sync_with_transport(&mut working_store, &data_dir_for_task, &blobs,
+            |checkpoint| commit_sync_checkpoint(&live_store, &data_dir_for_task, &mut checkpoint_base, checkpoint))?;
+        Ok::<sync_engine::SyncSummary, String>(summary)
     })
     .await
     .map_err(err)?;
 
     match sync_result {
-        Ok((updated_store, summary)) => {
-            let mut guard = state.store.lock().map_err(err)?;
-            save(&state, &updated_store)?;
-            *guard = updated_store;
-            Ok(summary)
-        }
+        Ok(summary) => Ok(summary),
         Err(error) => {
             let _ = mutate(&state, |store| {
                 store.last_sync_error = Some(error.clone());
@@ -649,6 +628,57 @@ fn save(state: &AppState, store: &Store) -> Result<(), String> {
     let temp = state.data_dir.join("journal.json.tmp");
     fs::write(&temp, json).map_err(err)?;
     fs::rename(&temp, &dest).map_err(err)?;
+    Ok(())
+}
+fn prepare_v2_migration(
+    store: &mut Store,
+    data_dir: &std::path::Path,
+    legacy: &impl drive_transport::RemoteTransport,
+    account: &str,
+    ensure_key: impl FnOnce() -> Result<(), String>,
+    mut checkpoint: impl FnMut(&Store) -> Result<(), String>,
+) -> Result<(), String> {
+    sync_engine::pull_legacy_with_transport(store, data_dir, legacy, &mut checkpoint)?;
+    if !store.sync_conflicts.is_empty() || !store.pending_resolutions.is_empty() {
+        return Err("기존 동기화 충돌을 해결한 뒤 새 동기화 방식으로 이전할 수 있습니다".into());
+    }
+    ensure_key()?;
+    reset_sync_tracking(store);
+    store.sync_format=2;
+    store.sync_account=Some(account.to_owned());
+    checkpoint(store)
+}
+fn reset_sync_tracking(store: &mut Store) {
+    store.sync_cursor = None;
+    store.seen_remote_objects.clear();
+    store.remote_heads.clear();
+    store.revision_parents.clear();
+    store.sync_base_entries.clear();
+    store.sync_base_journals.clear();
+    store.sync_base_templates.clear();
+    store.sync_base_nickname = None;
+    store.media_manifests.clear();
+    store.last_sync_error = None;
+}
+// Commit each checkpoint only if the local store has not changed since the
+// previous checkpoint. Aborting is safer than replacing a newer local edit;
+// a later sync can merge any revisions already uploaded to Drive.
+fn commit_sync_checkpoint(
+    live_store: &Mutex<Store>,
+    data_dir: &std::path::Path,
+    base: &mut serde_json::Value,
+    checkpoint: &Store,
+) -> Result<(), String> {
+    let mut guard = live_store.lock().map_err(err)?;
+    if serde_json::to_value(&*guard).map_err(err)? != *base {
+        return Err("동기화 중 로컬 변경이 발생했습니다. 변경 사항을 유지하고 다시 동기화합니다".into());
+    }
+    let json = serde_json::to_vec_pretty(checkpoint).map_err(err)?;
+    let temp = data_dir.join("journal.json.tmp");
+    fs::write(&temp, json).map_err(err)?;
+    fs::rename(&temp, data_dir.join("journal.json")).map_err(err)?;
+    *guard = checkpoint.clone();
+    *base = serde_json::to_value(&*guard).map_err(err)?;
     Ok(())
 }
 fn mutate<T>(
@@ -1076,10 +1106,27 @@ struct EntryInput {
     tags: Vec<String>,
     location: String,
     weather: String,
+    #[serde(default)]
+    expected_entry: Option<Entry>,
 }
+
+#[derive(Serialize)]
+struct SavedEntry { id: String, entry: Entry }
 
 #[tauri::command]
 fn save_entry(state: State<'_, AppState>, input: EntryInput) -> Result<String, String> {
+    save_entry_inner(&state, input).map(|saved| saved.id)
+}
+
+#[tauri::command]
+fn save_entry_checked(state: State<'_, AppState>, input: EntryInput) -> Result<SavedEntry, String> {
+    if input.id.is_some() && input.expected_entry.is_none() {
+        return Err("편집 시작 시점이 없어 기록을 저장할 수 없습니다".into());
+    }
+    save_entry_inner(&state, input)
+}
+
+fn save_entry_inner(state: &AppState, input: EntryInput) -> Result<SavedEntry, String> {
     if !valid_date(&input.date) {
         return Err("날짜는 YYYY-MM-DD 형식이어야 합니다".into());
     }
@@ -1110,6 +1157,9 @@ fn save_entry(state: State<'_, AppState>, input: EntryInput) -> Result<String, S
                 .iter_mut()
                 .find(|e| e.id == id && e.deleted_at.is_none())
                 .ok_or("글을 찾을 수 없습니다")?;
+            if input.expected_entry.as_ref().is_some_and(|expected| expected != entry) {
+                return Err("다른 기기에서 이 기록이 변경되었습니다. 현재 편집 내용은 화면에 남아 있습니다. 내용을 복사한 뒤 다시 열어 확인해 주세요".into());
+            }
             entry.journal_id = input.journal_id;
             entry.title = input.title;
             entry.body = input.body;
@@ -1119,7 +1169,7 @@ fn save_entry(state: State<'_, AppState>, input: EntryInput) -> Result<String, S
             entry.location = input.location;
             entry.weather = input.weather;
             entry.updated_at = timestamp;
-            Ok(entry.id.clone())
+            Ok(SavedEntry { id: entry.id.clone(), entry: entry.clone() })
         } else {
             let entry = Entry {
                 journal_id: input.journal_id,
@@ -1133,8 +1183,9 @@ fn save_entry(state: State<'_, AppState>, input: EntryInput) -> Result<String, S
                 ..Entry::default()
             };
             let id = entry.id.clone();
+            let saved = SavedEntry { id, entry: entry.clone() };
             store.entries.push(entry);
-            Ok(id)
+            Ok(saved)
         }
     })
 }
@@ -1793,7 +1844,7 @@ pub fn run() {
             }
             app.manage(AppState {
                 data_dir,
-                store: Mutex::new(store),
+                store: Arc::new(Mutex::new(store)),
                 unlocked: AtomicBool::new(unlocked),
                 syncing: AtomicBool::new(false),
             });
@@ -1815,6 +1866,7 @@ pub fn run() {
             save_journal,
             delete_journal,
             save_entry,
+            save_entry_checked,
             trash_entry,
             restore_entry,
             empty_trash,
@@ -1958,6 +2010,44 @@ mod tests {
         assert!(store.entries[1].attachments.is_empty());
     }
     #[test]
+    fn checked_save_rejects_stale_editor_without_losing_remote() {
+        let root = std::env::current_dir().unwrap().join("dev-data");
+        fs::create_dir_all(&root).unwrap();
+        let dir = root.join(format!("niki-checked-save-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let journal = Journal::default();
+        let entry = Entry { journal_id: journal.id.clone(), body: "remote edit".into(), updated_at: "remote-version".into(), ..Entry::default() };
+        let state = AppState { data_dir: dir.clone(), store: Arc::new(Mutex::new(Store { journals: vec![journal.clone()], entries: vec![entry.clone()], ..Store::default() })), unlocked: AtomicBool::new(true), syncing: AtomicBool::new(false) };
+        let input = EntryInput { id: Some(entry.id.clone()), journal_id: journal.id, title: String::new(), body: "local draft".into(), date: "2026-10-29".into(), favorite: false, tags: vec![], location: String::new(), weather: String::new(), expected_entry: Some(Entry { body: "old content".into(), ..entry.clone() }) };
+        assert!(save_entry_inner(&state, input).is_err());
+        assert_eq!(state.store.lock().unwrap().entries[0].body, "remote edit");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sync_checkpoint_never_overwrites_concurrent_local_edit() {
+        let root = std::env::current_dir().unwrap().join("dev-data");
+        fs::create_dir_all(&root).unwrap();
+        let dir = root.join(format!("niki-checkpoint-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let original = Store { entries: vec![Entry { body: "original".into(), ..Entry::default() }], ..Store::default() };
+        let live = Mutex::new(original.clone());
+        let mut base = serde_json::to_value(&original).unwrap();
+        let mut remote = original.clone();
+        remote.entries[0].body = "remote".into();
+        live.lock().unwrap().entries[0].body = "local edit".into();
+        assert!(commit_sync_checkpoint(&live, &dir, &mut base, &remote).is_err());
+        assert_eq!(live.lock().unwrap().entries[0].body, "local edit");
+        assert!(!dir.join("journal.json").exists());
+        let current = live.lock().unwrap().clone();
+        base = serde_json::to_value(&current).unwrap();
+        commit_sync_checkpoint(&live, &dir, &mut base, &current).unwrap();
+        let saved: Store = serde_json::from_slice(&fs::read(dir.join("journal.json")).unwrap()).unwrap();
+        assert_eq!(saved.entries[0].body, "local edit");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn backup_round_trip_preserves_formatted_entry_and_attachment() {
         let test_root = std::env::current_dir().unwrap().join("dev-data");
         fs::create_dir_all(&test_root).unwrap();
@@ -1965,7 +2055,7 @@ mod tests {
         fs::create_dir_all(dir.join("media")).unwrap();
         let state = AppState {
             data_dir: dir.clone(),
-            store: Mutex::new(Store::default()),
+            store: Arc::new(Mutex::new(Store::default())),
             unlocked: AtomicBool::new(true),
             syncing: AtomicBool::new(false),
         };
@@ -2014,11 +2104,11 @@ mod tests {
         fs::create_dir_all(dir.join("media")).unwrap();
         let state = AppState {
             data_dir: dir.clone(),
-            store: Mutex::new(Store {
+            store: Arc::new(Mutex::new(Store {
                 version: 1,
                 journals: vec![Journal::default()],
                 ..Store::default()
-            }),
+            })),
             unlocked: AtomicBool::new(true),
             syncing: AtomicBool::new(false),
         };

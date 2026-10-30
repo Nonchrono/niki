@@ -32,13 +32,17 @@ pub struct DriveBlobs<'a> {
     pub client: &'a crate::drive_transport::DriveClient,
     pub token: &'a str,
     pub key: &'a [u8; 32],
+    pub v2: bool,
 }
 impl BlobStore for DriveBlobs<'_> {
     fn put(&self, object_id: Uuid, bytes: &[u8]) -> Result<String, String> {
-        let file = self
-            .client
-            .upload_encrypted(self.token, object_id, self.key, bytes)?;
-        if file.name != object_id.to_string() {
+        let file = if self.v2 {
+            self.client.upload_v2_encrypted(self.token, object_id, self.key, bytes)?
+        } else {
+            self.client.upload_encrypted(self.token, object_id, self.key, bytes)?
+        };
+        let expected=if self.v2 { crate::drive_transport::v2_name(object_id) } else { object_id.to_string() };
+        if file.name != expected {
             return Err("Drive 객체 이름 불일치".into());
         }
         Ok(file.id)
