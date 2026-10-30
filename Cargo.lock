@@ -1954,7 +1954,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "niki_journal"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
  "argon2",
  "base64 0.22.1",

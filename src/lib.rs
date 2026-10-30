@@ -1518,11 +1518,11 @@ fn import_day_one(
     let source_entries = value
         .get("entries")
         .and_then(|v| v.as_array())
-        .ok_or("Day One entries 배열이 없습니다")?;
+        .ok_or("가져올 entries 배열이 없습니다")?;
     let journal_name = PathBuf::from(archive_name)
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("Day One 가져오기")
+        .unwrap_or("가져온 일기장")
         .to_string();
     let mut added = 0;
     let mut skipped = 0;

@@ -111,7 +111,7 @@ function render() {
       +(updateInfo.notes?'<span class="update-banner-notes" title="'+esc(updateInfo.notes)+'">'+esc(updateInfo.notes)+'</span>':'')
       +'<div class="update-banner-actions"><button class="primary" data-action="updater-install">지금 다운로드 및 재시작</button><button class="ghost" data-action="updater-dismiss">나중에</button><button class="ghost" data-action="updater-skip">이 버전 건너뛰기</button></div></div>'
     : '';
-  app.innerHTML='<div class="shell'+(sidebarCollapsed?' collapsed':'')+'">'+sidebar()+'<main class="workspace"><header class="topbar"><div class="top-title">'+esc(title)+'</div><div class="top-spacer"></div>'+(view==='timeline'?'<label class="search-wrap"><span>⌕</span><input id="search" class="search" placeholder="기록, 태그, 장소 검색" value="'+esc(search)+'"></label>':'')+syncBtn+'<button class="primary" data-action="new-entry">＋ 새 기록</button></header>'+updateBanner+'<div class="content" id="content"></div></main></div>';
+  app.innerHTML='<div class="shell'+(sidebarCollapsed?' collapsed':'')+'">'+sidebar()+'<main class="workspace"><header class="topbar"><div class="top-title">'+(view==='timeline'?'':esc(title))+'</div><div class="top-spacer"></div>'+(view==='timeline'?'<label class="search-wrap"><span>⌕</span><input id="search" class="search" placeholder="기록, 태그, 장소 검색" value="'+esc(search)+'"></label>':'')+syncBtn+'<button class="primary" data-action="new-entry">＋ 새 기록</button></header>'+updateBanner+'<div class="content" id="content"></div></main></div>';
   renderContent();
 }
 function filtered() { const q=search.toLocaleLowerCase().trim(); return active().filter(e=>(journal==='all'||e.journal_id===journal)&&(!dateFilter||e.date===dateFilter)&&(!favorites||e.favorite)&&(!tag||e.tags.includes(tag))&&(!q||[e.title,e.body,e.location,e.weather,...e.tags].join(' ').toLocaleLowerCase().includes(q))).sort((a,b)=>b.date.localeCompare(a.date)||b.updated_at.localeCompare(a.updated_at)); }
@@ -134,7 +134,6 @@ function entrySyncBadge(id) {
 }
 function renderSyncSettings(pane) {
   const s = data.sync_status || {};
-  const mb = ((s.synced_media_bytes || 0) / (1024 * 1024)).toFixed(2);
   pane.innerHTML='<div class="wide-head"><h2>Google Drive 동기화</h2></div>';
 
   const accountCard = document.createElement('div');
@@ -150,7 +149,6 @@ function renderSyncSettings(pane) {
       +'</div>'
       +'</div>'
       +'<div class="panel-actions">'
-      +'<button class="primary" data-action="drive-sync" '+(s.sync_paused?'disabled':'')+'>↻ 지금 동기화</button>'
       +'<button class="ghost" data-action="google-login">다른 Google 계정으로 전환</button>'
       +'<button class="ghost danger" data-action="drive-disconnect">로그아웃</button>'
       +'</div>';
@@ -173,14 +171,10 @@ function renderSyncSettings(pane) {
 
   const syncCard=document.createElement('div');
   syncCard.className='panel-card';
-  syncCard.innerHTML='<h3>동기화 상태</h3>'
-    +'<p><strong>계정 상태:</strong> '+esc(accountLabel(s))
-    +' · <strong>동기화:</strong> '+(s.sync_paused ? '일시 중지됨' : '자동 동기화 활성')+'</p>'
+  syncCard.innerHTML='<h3>동기화 상태 <span class="sync-badge '+(s.sync_paused?'paused':'')+'">'+(s.sync_paused?'일시 중지':'자동 동기화')+'</span></h3>'
+    +'<p><strong>계정 상태:</strong> '+esc(accountLabel(s))+'</p>'
     +'<p><strong>마지막 동기화:</strong> '+esc(timeLabel(s.last_sync_at))
-    +' · <strong>전송 대기:</strong> '+(s.pending_upload_count||0)+'건'
-    +' · <strong>충돌:</strong> '+(s.conflict_count||0)+'건'
-    +' · <strong>원격 버전:</strong> '+(s.remote_object_count||0)+'개'
-    +' · <strong>동기화된 첨부:</strong> '+mb+' MB</p>'
+    +'</p>'
     +(s.last_sync_error ? '<p style="color:#b42318"><strong>최근 오류:</strong> '+esc(s.last_sync_error)+'</p>' : '')
     +(data.pending_resolution_count ? '<p>충돌 해결 '+data.pending_resolution_count+'건이 다음 동기화 시 업로드됩니다.</p>' : '')
     +'<div class="panel-actions">'
@@ -207,8 +201,50 @@ function editor() {
   const pane=document.getElementById('editor-pane'), e=selected();
   if(!pane) return;
   if(!e||e.deleted_at) { pane.innerHTML='<div class="empty" style="height:100%"><div class="empty-art">✎</div><h2>오늘을 기록해 보세요</h2><p>작은 순간도 시간이 지나면 소중한 이야기가 됩니다.</p><button class="primary" data-action="new-entry">＋ 새 기록 쓰기</button></div>'; return; }
-  pane.innerHTML='<div class="editor-inner"><div class="editor-top"><span class="status" id="save-status">모든 변경 사항 저장됨'+esc(entrySyncBadge(e.id))+'</span><span class="spacer"></span><button class="icon-button" data-action="favorite-entry" title="즐겨찾기">'+(e.favorite?'♥':'♡')+'</button><button class="ghost" data-action="print">인쇄 / PDF</button><button class="icon-button" data-action="trash-entry" title="삭제">⋯</button></div><input class="editor-title" id="entry-title" placeholder="제목 없는 기록" value="'+esc(e.title)+'"><div class="editor-meta"><span>◷ <input id="entry-date" type="date" value="'+esc(e.date)+'"></span><span>◈ <select id="entry-journal">'+data.journals.map(j=>'<option value="'+esc(j.id)+'" '+(j.id===e.journal_id?'selected':'')+'>'+esc(j.name)+'</option>').join('')+'</select></span><span>⌗ <input id="entry-tags" placeholder="태그, 쉼표 구분" value="'+esc(e.tags.join(', '))+'"></span></div><div class="toolbar">'+[['bold','B'],['italic','I'],['heading','H'],['quote','❞'],['list','☷'],['check','☑']].map(x=>'<button class="tool" data-action="format" data-format="'+x[0]+'">'+x[1]+'</button>').join('')+'<span class="tool sep"></span><button class="tool" data-action="attach" title="첨부">📎</button><select id="insert-template" class="filter-select"><option value="">템플릿</option>'+data.templates.map(t=>'<option value="'+esc(t.id)+'">'+esc(t.name)+'</option>').join('')+'</select><span style="flex:1"></span><button class="chip '+(preview?'active':'')+'" data-action="preview">'+(preview?'편집':'미리보기')+'</button></div>'+(preview?'<div class="preview">'+md(e.body)+'</div>':'<textarea id="entry-body" class="editor-body" placeholder="오늘의 이야기를 시작해 보세요...">'+esc(e.body)+'</textarea>')+'<div class="attach-grid">'+e.attachments.map(a=>'<div class="attach-tile" id="att-'+esc(a.id)+'"><span>'+esc(a.name)+'</span><button data-action="remove-attachment" data-id="'+esc(a.id)+'" title="삭제">×</button></div>').join('')+'</div><div class="extra-fields"><label>장소<input id="entry-location" placeholder="장소" value="'+esc(e.location)+'"></label><label>날씨 / 메모<input id="entry-weather" placeholder="날씨" value="'+esc(e.weather)+'"></label></div></div>';
+  pane.innerHTML='<div class="editor-inner"><div class="editor-top"><span class="status" id="save-status">모든 변경 사항 저장됨'+esc(entrySyncBadge(e.id))+'</span><span class="spacer"></span><button class="icon-button" data-action="favorite-entry" title="즐겨찾기">'+(e.favorite?'♥':'♡')+'</button><button class="ghost" data-action="print">인쇄 / PDF</button><button class="icon-button" data-action="entry-menu" title="기록 메뉴" aria-label="기록 메뉴" aria-haspopup="menu">⋯</button></div><input class="editor-title" id="entry-title" placeholder="제목 없는 기록" value="'+esc(e.title)+'"><div class="editor-meta"><span class="date-control"><input id="entry-date" type="hidden" value="'+esc(e.date)+'"><button class="date-trigger" data-action="date-picker" aria-label="기록 날짜 선택" aria-haspopup="dialog">◷ ' +esc(dateLabel(e.date))+' ▾</button><span id="date-picker"></span></span><span>◈ <select id="entry-journal" aria-label="일기장">'+data.journals.map(j=>'<option value="'+esc(j.id)+'" '+(j.id===e.journal_id?'selected':'')+'>'+esc(j.name)+'</option>').join('')+'</select></span><span>⌗ <input id="entry-tags" placeholder="태그, 쉼표 구분" value="'+esc(e.tags.join(', '))+'"></span></div><div class="toolbar">'+[['bold','B'],['italic','I'],['heading','H'],['quote','❞'],['list','☷'],['check','☑']].map(x=>'<button class="tool" data-action="format" data-format="'+x[0]+'">'+x[1]+'</button>').join('')+'<span class="tool sep"></span><button class="tool" data-action="attach" title="첨부">📎</button><select id="insert-template" class="filter-select"><option value="">템플릿</option>'+data.templates.map(t=>'<option value="'+esc(t.id)+'">'+esc(t.name)+'</option>').join('')+'</select><span style="flex:1"></span><button class="chip '+(preview?'active':'')+'" data-action="preview">'+(preview?'편집으로 돌아가기':'서식 미리보기')+'</button></div>'+(preview?'<div class="preview">'+md(e.body)+'</div>':'<textarea id="entry-body" class="editor-body" placeholder="오늘의 이야기를 시작해 보세요...">'+esc(e.body)+'</textarea>')+'<div class="attach-grid">'+e.attachments.map(a=>'<div class="attach-tile" id="att-'+esc(a.id)+'"><span>'+esc(a.name)+'</span><button data-action="remove-attachment" data-id="'+esc(a.id)+'" title="삭제">×</button></div>').join('')+'</div><div class="extra-fields"><label>장소<input id="entry-location" placeholder="장소" value="'+esc(e.location)+'"></label><label>날씨 / 메모<input id="entry-weather" placeholder="날씨" value="'+esc(e.weather)+'"></label></div></div>';
   e.attachments.filter(a=>a.mime.startsWith('image/')).forEach(async a=>{try{const url=await getMedia(a.id), box=document.getElementById('att-'+a.id); if(box){const img=document.createElement('img');img.src=url;img.alt=a.name;box.prepend(img);}}catch(x){console.warn(x);}});
+}
+let pickerMonth = null;
+function closeDatePicker() {
+  const picker=document.getElementById('date-picker');
+  if(picker) picker.innerHTML='';
+}
+function openDatePicker() {
+  const picker=document.getElementById('date-picker');
+  if(picker.firstElementChild){closeDatePicker();return;}
+  const value=document.getElementById('entry-date').value || localDate();
+  const [year,month]=value.split('-').map(Number);
+  pickerMonth=new Date(year,month-1,1);
+  renderDatePicker();
+}
+function renderDatePicker() {
+  const picker=document.getElementById('date-picker'), value=document.getElementById('entry-date').value;
+  const y=pickerMonth.getFullYear(),m=pickerMonth.getMonth(),offset=new Date(y,m,1).getDay();
+  let days='';
+  for(let i=0;i<42;i++){
+    const d=new Date(y,m,i-offset+1), key=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    days+='<button class="date-day '+(d.getMonth()!==m?'outside ':'')+(key===value?'selected ':'')+(key===localDate()?'today':'')+'" data-action="date-select" data-date="'+key+'" aria-label="'+esc(dateLabel(key))+'" '+(key===value?'aria-current="date"':'')+'>'+d.getDate()+'</button>';
+  }
+  picker.innerHTML='<div class="date-popover" role="dialog" aria-label="날짜 선택"><div class="date-header"><button class="date-nav" data-action="date-prev" aria-label="이전 달">‹</button><strong>'+y+'년 '+(m+1)+'월</strong><button class="date-nav" data-action="date-next" aria-label="다음 달">›</button></div><div class="date-grid">'+['일','월','화','수','목','금','토'].map(day=>'<span class="date-weekday">'+day+'</span>').join('')+days+'</div><label class="date-direct">날짜 직접 선택 <input type="date" id="date-direct" value="'+esc(value)+'"></label><button class="date-today" data-action="date-select" data-date="'+localDate()+'">오늘</button></div>';
+}
+function setEntryDate(value) {
+  const field=document.getElementById('entry-date');
+  if(!value || !field) return;
+  field.value=value;
+  document.querySelector('.date-trigger').textContent='◷ '+dateLabel(value)+' ▾';
+  closeDatePicker();
+  scheduleSave();
+}
+function openEntryMenu(button) {
+  const menu=document.createElement('div');
+  menu.className='context-menu';
+  menu.setAttribute('role','menu');
+  menu.innerHTML='<button class="context-menu-item danger" role="menuitem" data-action="trash-entry">× 휴지통으로 이동</button>';
+  document.body.appendChild(menu);
+  const anchor=button.getBoundingClientRect(),rect=menu.getBoundingClientRect();
+  menu.style.left=Math.max(8,Math.min(anchor.right-rect.width,window.innerWidth-rect.width-8))+'px';
+  menu.style.top=Math.max(8,Math.min(anchor.bottom+4,window.innerHeight-rect.height-8))+'px';
+  menu.querySelector('button').focus();
 }
 async function getMedia(id) { if(data.locked)throw new Error('앱이 잠겨 있습니다'); if(!media.has(id)){ const x=await invoke('get_attachment',{attachmentId:id}); if(data.locked)throw new Error('앱이 잠겨 있습니다'); if(!/^(image\/(png|jpeg|gif|webp)|video\/(mp4|quicktime)|audio\/(mp4|mpeg|wav)|application\/(pdf|octet-stream))$/.test(x.mime))throw new Error('허용되지 않은 미디어 유형'); media.set(id,'data:'+x.mime+';base64,'+x.data); } return media.get(id); }
 function calendar(c) { const y=month.getFullYear(),m=month.getMonth(),offset=new Date(y,m,1).getDay(), rec=active().filter(e=>journal==='all'||e.journal_id===journal); let out='<div class="wide-view"><div class="wide-head"><h2>'+y+'년 '+(m+1)+'월</h2><span class="spacer"></span><button class="ghost" data-action="prev-month">←</button><button class="ghost" data-action="today-month">오늘</button><button class="ghost" data-action="next-month">→</button></div><div class="calendar">'+['일','월','화','수','목','금','토'].map(x=>'<div class="weekday">'+x+'</div>').join(''); for(let i=0;i<42;i++){const d=new Date(y,m,i-offset+1),key=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'),items=rec.filter(e=>e.date===key); out+='<button class="day '+(d.getMonth()===m?'':'outside')+' '+(key===localDate()?'today':'')+'" data-action="calendar-day" data-date="'+key+'"><span>'+d.getDate()+'</span>'+items.slice(0,3).map(e=>'<em>● '+esc(e.title||'제목 없는 기록')+'</em>').join('')+'</button>'; } c.innerHTML=out+'</div></div>'; }
@@ -220,7 +256,7 @@ function settings(c) {
   const nav = [
     ['profile', '☺ 별명 설정', data.nickname?.trim() ? '현재 별명: ' + data.nickname.trim() : '별명 미설정 (안녕하세요!)'],
     ['sync', '☁ Google Drive 동기화', (s.connected ? accountLabel(s) : 'Google 로그인 가능') + (data.sync_conflicts?.length ? ' · 충돌 ' + data.sync_conflicts.length + '건' : '')],
-    ['backup', '⇅ 가져오기와 백업', 'Day One 및 Niki 백업 파일 관리'],
+    ['backup', '⇅ 가져오기와 백업', '가져오기 및 백업 파일 관리'],
     ['templates', '▤ 템플릿', '저장된 서식 ' + data.templates.length + '개'],
     ['lock', '🔒 앱 잠금', data.lock_enabled ? '화면 잠금 사용 중' : '화면 잠금 해제됨'],
     ['about', 'ⓘ 앱 정보', 'v' + (data.app_version || '0.1.0') + (updateInfo?.update_available ? ' · ✨ v' + updateInfo.latest_version + ' 업데이트 가능' : ' · 자동 업데이트 관리')]
@@ -231,7 +267,7 @@ function settings(c) {
   const detail=document.getElementById('settings-detail');
   if(settingsTab==='profile') detail.innerHTML='<div class="wide-head"><h2>별명 설정</h2></div><div class="panel-card"><h3>좌측 메뉴 상단 별명</h3><p>좌측 메뉴바 상단에 표시할 이름이나 별명을 설정합니다. 비워 두면 기본 문구인 <strong>안녕하세요!</strong>가 표시됩니다.</p><input id="profile-nickname" maxlength="40" placeholder="안녕하세요!" value="'+esc(data.nickname||'')+'"><div class="panel-actions"><button class="primary" data-action="save-nickname">별명 저장</button>'+(data.nickname?.trim()?'<button class="ghost" data-action="clear-nickname">초기화 (안녕하세요!)</button>':'')+'</div></div>';
   else if(settingsTab==='sync') renderSyncSettings(detail);
-  else if(settingsTab==='backup') detail.innerHTML='<div class="wide-head"><h2>가져오기와 백업</h2></div><div class="panel-card"><h3>파일 가져오기 및 백업</h3><p>Day One JSON/ZIP 파일 또는 Niki 백업을 가져옵니다. 백업에는 첨부 파일도 들어갑니다.</p><div class="panel-actions"><button class="ghost" data-action="import">파일 가져오기</button><button class="primary" data-action="backup">백업 만들기</button></div></div>';
+  else if(settingsTab==='backup') detail.innerHTML='<div class="wide-head"><h2>가져오기와 백업</h2></div><div class="panel-card"><h3>파일 가져오기 및 백업</h3><p>JSON/ZIP 파일 또는 Niki 백업을 가져옵니다. 백업에는 첨부 파일도 들어갑니다.</p><div class="panel-actions"><button class="ghost" data-action="import">파일 가져오기</button><button class="primary" data-action="backup">백업 만들기</button></div></div>';
   else if(settingsTab==='templates') detail.innerHTML='<div class="wide-head"><h2>템플릿</h2></div><div class="panel-card"><h3>사용자 템플릿 관리</h3><p>반복해서 쓰는 질문과 서식을 저장합니다.</p>'+data.templates.map(t=>'<div style="display:flex;gap:8px;align-items:center;margin:6px 0"><span style="flex:1">'+esc(t.name)+'</span><button class="ghost" data-action="edit-template" data-id="'+esc(t.id)+'">수정</button><button class="ghost danger" data-action="delete-template" data-id="'+esc(t.id)+'">삭제</button></div>').join('')+'<button class="ghost" data-action="new-template">＋ 템플릿 만들기</button></div>';
   else if(settingsTab==='lock') detail.innerHTML='<div class="wide-head"><h2>앱 잠금</h2></div><div class="panel-card"><h3>화면 잠금 암호</h3><p>화면 접근을 막는 암호입니다. 로컬 저장 파일 자체는 암호화하지 않습니다.</p><input type="password" id="current-password" placeholder="현재 암호"><input type="password" id="new-password" placeholder="새 암호 (8자 이상, 비우면 해제)"><div class="panel-actions"><button class="ghost" data-action="set-password">암호 저장</button>'+(data.lock_enabled?'<button class="ghost" data-action="lock">지금 잠그기</button>':'')+'</div></div>';
   else renderAboutSettings(detail);
@@ -240,15 +276,12 @@ function renderAboutSettings(pane) {
   const cfg = data.updater_config || {};
   const ver = data.app_version || '0.1.0';
   const isMac = /Mac/i.test(navigator.platform || navigator.userAgent || '');
-  const hostName = isMac ? 'Mac' : 'PC';
   const installLabel = data.installed_on_pc
     ? (isMac ? 'Applications 설치본 갱신' : 'PC 설치본 갱신 및 바로가기 재생성')
     : (isMac ? '이 Mac에 설치하기 (/Applications 등록)' : '이 PC에 설치하기 (바탕화면·시작 메뉴 등록)');
   pane.innerHTML = '<div class="wide-head"><h2>앱 정보</h2></div>'
     +'<div class="panel-card"><h3>Niki v'+esc(ver)+'</h3>'
     +'<p>구독과 광고 없이 로컬에서 사용하며, 선택 시 사용자의 Google Drive(<code>appDataFolder</code>)를 통해 256비트 종단간 암호화 동기화를 지원합니다.</p>'
-    +'<p><strong>'+hostName+' 설치 상태:</strong> '+(data.running_installed ? '<span class="badge-connected">● '+hostName+' 설치 버전 실행 중</span>' : data.installed_on_pc ? '설치됨 (현재 빌드 폴더에서 실행 중)' : '미설치')+(data.install_path?'<br><span class="subtle">설치 경로: '+esc(data.install_path)+'</span>':'')+'</p>'
-    +(updateInfo ? '<p><strong>최신 확인 버전:</strong> v'+esc(updateInfo.latest_version)+' '+(updateInfo.update_available ? '<span class="badge-connected">업데이트 가능</span>' : '(최신 버전 사용 중)')+(updateInfo.notes?'<br><span class="subtle">'+esc(updateInfo.notes)+'</span>':'')+'</p>' : '')
     +'<div class="panel-actions">'
     +'<button class="ghost" data-action="updater-check-now">지금 업데이트 확인</button>'
     +(updateInfo?.update_available ? '<button class="primary" data-action="updater-install">✨ v'+esc(updateInfo.latest_version)+' 다운로드 및 재시작</button>' : '')
@@ -307,7 +340,7 @@ document.addEventListener('contextmenu',ev=>{
   menu.style.left=Math.max(8,Math.min(ev.clientX,window.innerWidth-rect.width-8))+'px';
   menu.style.top=Math.max(8,Math.min(ev.clientY,window.innerHeight-rect.height-8))+'px';
 });
-document.addEventListener('click',async ev=>{const b=ev.target.closest('[data-action]');closeContextMenu();if(!b)return;if(b.tagName==='A')ev.preventDefault();const a=b.dataset.action,id=b.dataset.id;try{
+document.addEventListener('click',async ev=>{const b=ev.target.closest('[data-action]');closeContextMenu();if(!ev.target.closest('.date-control'))closeDatePicker();if(!b)return;if(b.tagName==='A')ev.preventDefault();const a=b.dataset.action,id=b.dataset.id;try{
   if(a==='unlock'){await invoke('unlock',{password:document.getElementById('unlock-password').value});await reload();render();autoCheckUpdate();autoSyncDrive();}
   else if(a==='toggle-sidebar'){sidebarCollapsed=!sidebarCollapsed;render();}
   else if(a==='updater-save-config'){const ep=document.getElementById('updater-endpoint')?.value||'',pk=document.getElementById('updater-pubkey')?.value||'',ac=document.getElementById('updater-auto-check')?.checked??true;await invoke('updater_save_config',{endpoint:ep,pubkey:pk,autoCheck:ac});await reload();render();toast('업데이트 서버 설정이 저장되었습니다');}
@@ -337,7 +370,11 @@ document.addEventListener('click',async ev=>{const b=ev.target.closest('[data-ac
   else if(a==='favorite-entry'){const e=selected();e.favorite=!e.favorite;b.textContent=e.favorite?'♥':'♡';scheduleSave();}
   else if(a==='preview'){await leave();preview=!preview;editor();} else if(a==='format')format(b.dataset.format);
   else if(a==='attach')attachFile.click(); else if(a==='print')window.print();
-  else if(a==='trash-entry'&&confirm('이 기록을 휴지통으로 이동할까요?')){await invoke('trash_entry',{id:entryId});entryId=null;await reload();render();}
+  else if(a==='entry-menu'){openEntryMenu(b);}
+  else if(a==='date-picker'){openDatePicker();}
+  else if(a==='date-prev'||a==='date-next'){pickerMonth=new Date(pickerMonth.getFullYear(),pickerMonth.getMonth()+(a==='date-next'?1:-1),1);renderDatePicker();}
+  else if(a==='date-select'){setEntryDate(b.dataset.date);}
+  else if(a==='trash-entry'&&confirm('이 기록을 휴지통으로 이동할까요?')){await leave();await invoke('trash_entry',{id:entryId});entryId=null;await reload();render();}
   else if(a==='restore'){await invoke('restore_entry',{id});await reload();render();toast('기록을 복원했습니다');}
   else if(a==='empty-trash'&&confirm('휴지통의 모든 기록을 영구 삭제할까요? 삭제 후에는 복원할 수 없습니다.')){const count=await invoke('empty_trash');media.clear();await reload();render();toast('휴지통에서 '+count+'개의 기록을 영구 삭제했습니다');}
   else if(a==='remove-attachment'&&confirm('첨부 파일을 삭제할까요?')){await invoke('remove_attachment',{entryId,attachmentId:id});media.delete(id);await reload();editor();}
@@ -353,8 +390,8 @@ document.addEventListener('click',async ev=>{const b=ev.target.closest('[data-ac
   else if(a==='set-password'){await invoke('set_lock_password',{currentPassword:document.getElementById('current-password').value,newPassword:document.getElementById('new-password').value});await reload();render();toast('잠금 설정 저장됨');}
 }catch(e){fail(e);}});
 document.addEventListener('input',ev=>{if(ev.target.id==='search'){const pos=ev.target.selectionStart;search=ev.target.value;timeline();const field=document.getElementById('search');field.focus();field.setSelectionRange(pos,pos);}else if(['entry-title','entry-body','entry-date','entry-tags','entry-location','entry-weather'].includes(ev.target.id))scheduleSave();});
-document.addEventListener('change',ev=>{if(ev.target.id==='tag-filter'){tag=ev.target.value;timeline();}else if(ev.target.id==='entry-journal')scheduleSave();else if(ev.target.id==='insert-template'&&ev.target.value){const t=data.templates.find(x=>x.id===ev.target.value),body=document.getElementById('entry-body');if(t&&body){body.value=t.body+(body.value?'\n\n'+body.value:'');scheduleSave();}ev.target.value='';}});
-document.addEventListener('keydown',ev=>{const mod=ev.ctrlKey||ev.metaKey;if(ev.key==='Escape')closeContextMenu();if(ev.key==='Enter'&&ev.target.id==='unlock-password')document.querySelector('[data-action="unlock"]')?.click();if(ev.key==='Enter'&&ev.target.id==='profile-nickname')document.querySelector('[data-action="save-nickname"]')?.click();if(mod&&ev.key.toLowerCase()==='n'){ev.preventDefault();newEntry().catch(fail);}if(mod&&ev.key.toLowerCase()==='s'){ev.preventDefault();saveCurrent().then(()=>toast('저장했습니다'));}});
+document.addEventListener('change',ev=>{if(ev.target.id==='date-direct'){setEntryDate(ev.target.value);}else if(ev.target.id==='tag-filter'){tag=ev.target.value;timeline();}else if(ev.target.id==='entry-journal')scheduleSave();else if(ev.target.id==='insert-template'&&ev.target.value){const t=data.templates.find(x=>x.id===ev.target.value),body=document.getElementById('entry-body');if(t&&body){body.value=t.body+(body.value?'\n\n'+body.value:'');scheduleSave();}ev.target.value='';}});
+document.addEventListener('keydown',ev=>{const mod=ev.ctrlKey||ev.metaKey;if(ev.key==='Escape'){closeContextMenu();closeDatePicker();}if(ev.key==='Enter'&&ev.target.id==='unlock-password')document.querySelector('[data-action="unlock"]')?.click();if(ev.key==='Enter'&&ev.target.id==='profile-nickname')document.querySelector('[data-action="save-nickname"]')?.click();if(mod&&ev.key.toLowerCase()==='n'){ev.preventDefault();newEntry().catch(fail);}if(mod&&ev.key.toLowerCase()==='s'){ev.preventDefault();saveCurrent().then(()=>toast('저장했습니다'));}});
 importFile.addEventListener('change',async()=>{const f=importFile.files?.[0];if(!f)return;try{toast('가져오는 중…');const result=await invoke('import_data',{name:f.name,data:await toBase64(f)});await reload();render();toast(result.entries_added+'개 글, '+result.media_added+'개 첨부 가져옴'+(result.warnings.length?' · 경고 '+result.warnings.length+'건':''));if(result.warnings.length)console.warn(result.warnings);}catch(e){fail(e);}finally{importFile.value='';}});
 attachFile.addEventListener('change',async()=>{const id=entryId;if(!id)return;try{await leave();for(const f of attachFile.files||[]){await invoke('add_attachment',{entryId:id,name:f.name,mime:f.type||'application/octet-stream',data:await toBase64(f)});}await reload();editor();toast('첨부 파일 저장됨');}catch(e){fail(e);}finally{attachFile.value='';}});
 document.addEventListener('click',async ev=>{
