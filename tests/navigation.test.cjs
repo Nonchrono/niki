@@ -86,6 +86,7 @@ const path = require('node:path');
   await page.waitForFunction(() => location.hash === '#/settings/sync');
   assert.equal(new URL(page.url()).hash, '#/settings/sync');
   await page.locator('[data-action="settings-tab"]').filter({ hasText: '템플릿' }).click();
+  await page.locator('#settings-detail [data-action="new-template"]').waitFor();
   const templateGap = await page.evaluate(() => document.querySelector('.settings-card > [data-slot="button"]').getBoundingClientRect().top
     - document.querySelector('.settings-card > p').getBoundingClientRect().bottom);
   assert.ok(templateGap >= 10, `settings description and action are too close (${templateGap}px)`);
