@@ -22,7 +22,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::PathBuf,
     sync::{
@@ -30,7 +30,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +93,12 @@ struct PendingResolution {
     choice: String,
     chosen: Option<Entry>,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PendingUpload {
+    revision: sync_engine::SyncRevision,
+    resolution_id: Option<String>,
+}
 impl Default for Entry {
     fn default() -> Self {
         let timestamp = now();
@@ -144,6 +150,9 @@ struct Store {
     password_hash: Option<String>,
     sync_conflicts: Vec<SyncConflict>,
     pending_resolutions: Vec<PendingResolution>,
+    pending_uploads: Vec<PendingUpload>,
+    ignored_remote_objects: HashSet<String>,
+    blocked_remote_object: Option<String>,
     device_id: String,
     sync_cursor: Option<String>,
     last_sync_at: Option<String>,
@@ -172,6 +181,8 @@ struct SyncStatus {
     sync_paused: bool,
     last_sync_at: Option<String>,
     last_sync_error: Option<String>,
+    blocked_remote_object: Option<String>,
+    ignored_remote_count: usize,
     pending_upload_count: usize,
     conflict_count: usize,
     pending_resolution_count: usize,
@@ -377,7 +388,8 @@ async fn drive_connect(
             existing_key.unwrap_or(drive_transport::ACCOUNT_ENVELOPE_KEY)
         };
         let client = drive_transport::DriveClient::new()?;
-        let active_key=select_legacy_key(&client,&tokens.access_token,preferred_key,existing_key)?;
+        let active_key =
+            select_legacy_key(&client, &tokens.access_token, preferred_key, existing_key)?;
         let reset_needed = existing_key != Some(active_key);
         let _ = drive_auth::save_sync_key(&active_key);
         let encoded_key = sync_crypto::encode_recovery_key(&active_key);
@@ -398,6 +410,9 @@ async fn drive_connect(
         let _ = mutate(&state, |store| {
             store.sync_cursor = None;
             store.seen_remote_objects.clear();
+            store.pending_uploads.clear();
+            store.ignored_remote_objects.clear();
+            store.blocked_remote_object = None;
             store.remote_heads.clear();
             store.revision_parents.clear();
             store.sync_base_entries.clear();
@@ -436,6 +451,9 @@ fn drive_generate_sync_key(state: State<'_, AppState>) -> Result<String, String>
     mutate(&state, |store| {
         store.sync_cursor = None;
         store.seen_remote_objects.clear();
+        store.pending_uploads.clear();
+        store.ignored_remote_objects.clear();
+        store.blocked_remote_object = None;
         store.remote_heads.clear();
         store.revision_parents.clear();
         store.sync_base_entries.clear();
@@ -465,6 +483,9 @@ fn drive_set_sync_key(state: State<'_, AppState>, recovery_key: String) -> Resul
     mutate(&state, |store| {
         store.sync_cursor = None;
         store.seen_remote_objects.clear();
+        store.pending_uploads.clear();
+        store.ignored_remote_objects.clear();
+        store.blocked_remote_object = None;
         store.remote_heads.clear();
         store.revision_parents.clear();
         store.sync_base_entries.clear();
@@ -487,6 +508,10 @@ fn drive_set_paused(state: State<'_, AppState>, paused: bool) -> Result<(), Stri
 
 #[tauri::command]
 async fn drive_sync_now(state: State<'_, AppState>) -> Result<sync_engine::SyncSummary, String> {
+    drive_sync_now_inner(&state).await
+}
+
+async fn drive_sync_now_inner(state: &AppState) -> Result<sync_engine::SyncSummary, String> {
     ensure_unlocked(&state)?;
     if state.syncing.swap(true, Ordering::SeqCst) {
         return Err("이미 동기화가 진행 중입니다".into());
@@ -566,13 +591,53 @@ async fn drive_sync_now(state: State<'_, AppState>) -> Result<sync_engine::SyncS
     match sync_result {
         Ok(summary) => Ok(summary),
         Err(error) => {
+            let blocked = error
+                .strip_prefix("BLOCKED_REMOTE:")
+                .and_then(|rest| rest.split_once(':'))
+                .and_then(|(id, reason)| {
+                    Uuid::parse_str(id)
+                        .ok()
+                        .map(|_| (id.to_owned(), reason.to_owned()))
+                });
+            let message = blocked
+                .as_ref()
+                .map(|(id, reason)| format!("원격 동기화 파일 {id}: {reason}"))
+                .unwrap_or(error);
             let _ = mutate(&state, |store| {
-                store.last_sync_error = Some(error.clone());
+                store.blocked_remote_object = blocked.as_ref().map(|(id, _)| id.clone());
+                store.last_sync_error = Some(message.clone());
                 Ok(())
             });
-            Err(error)
+            Err(message)
         }
     }
+}
+
+#[tauri::command]
+fn drive_skip_blocked_revision(
+    state: State<'_, AppState>,
+    object_id: String,
+) -> Result<(), String> {
+    mutate(&state, |store| {
+        if store.blocked_remote_object.as_deref() != Some(object_id.as_str()) {
+            return Err("건너뛸 원격 파일을 다시 확인하세요".into());
+        }
+        store.ignored_remote_objects.insert(object_id);
+        store.blocked_remote_object = None;
+        store.last_sync_error = None;
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn drive_retry_ignored_revisions(state: State<'_, AppState>) -> Result<(), String> {
+    mutate(&state, |store| {
+        store.ignored_remote_objects.clear();
+        store.blocked_remote_object = None;
+        store.last_sync_error = None;
+        store.sync_cursor = None;
+        Ok(())
+    })
 }
 
 fn now() -> String {
@@ -639,18 +704,24 @@ fn prepare_v2_migration(
     mut checkpoint: impl FnMut(&Store) -> Result<(), String>,
 ) -> Result<(), String> {
     sync_engine::pull_legacy_with_transport(store, data_dir, legacy, &mut checkpoint)?;
-    if !store.sync_conflicts.is_empty() || !store.pending_resolutions.is_empty() {
+    if !store.sync_conflicts.is_empty()
+        || !store.pending_resolutions.is_empty()
+        || !store.pending_uploads.is_empty()
+    {
         return Err("기존 동기화 충돌을 해결한 뒤 새 동기화 방식으로 이전할 수 있습니다".into());
     }
     ensure_key()?;
     reset_sync_tracking(store);
-    store.sync_format=2;
-    store.sync_account=Some(account.to_owned());
+    store.sync_format = 2;
+    store.sync_account = Some(account.to_owned());
     checkpoint(store)
 }
 fn reset_sync_tracking(store: &mut Store) {
     store.sync_cursor = None;
     store.seen_remote_objects.clear();
+    store.pending_uploads.clear();
+    store.ignored_remote_objects.clear();
+    store.blocked_remote_object = None;
     store.remote_heads.clear();
     store.revision_parents.clear();
     store.sync_base_entries.clear();
@@ -671,7 +742,9 @@ fn commit_sync_checkpoint(
 ) -> Result<(), String> {
     let mut guard = live_store.lock().map_err(err)?;
     if serde_json::to_value(&*guard).map_err(err)? != *base {
-        return Err("동기화 중 로컬 변경이 발생했습니다. 변경 사항을 유지하고 다시 동기화합니다".into());
+        return Err(
+            "동기화 중 로컬 변경이 발생했습니다. 변경 사항을 유지하고 다시 동기화합니다".into(),
+        );
     }
     let json = serde_json::to_vec_pretty(checkpoint).map_err(err)?;
     let temp = data_dir.join("journal.json.tmp");
@@ -730,6 +803,8 @@ fn bootstrap(state: State<'_, AppState>) -> Result<Snapshot, String> {
             sync_paused: store.sync_paused,
             last_sync_at: store.last_sync_at.clone(),
             last_sync_error: store.last_sync_error.clone(),
+            blocked_remote_object: store.blocked_remote_object.clone(),
+            ignored_remote_count: store.ignored_remote_objects.len(),
             pending_upload_count: sync_engine::pending_upload_count(&store),
             conflict_count: store.sync_conflicts.len(),
             pending_resolution_count: store.pending_resolutions.len(),
@@ -825,6 +900,13 @@ fn resolve_conflict(
     let current = store.entries.iter().position(|e| e.id == conflict.entry_id);
     if current.map(|i| &store.entries[i]) != conflict.local.as_ref() {
         return Err("충돌 이후 이 기록이 변경됐습니다. 다시 동기화하세요".into());
+    }
+    if choice == "local" && current.is_none() {
+        if let Some(mut deleted) = conflict.remote.clone() {
+            deleted.deleted_at = Some(now());
+            deleted.updated_at = now();
+            store.entries.push(deleted);
+        }
     }
     if choice == "remote" {
         if let Some(mut remote) = conflict.remote.clone() {
@@ -1111,7 +1193,10 @@ struct EntryInput {
 }
 
 #[derive(Serialize)]
-struct SavedEntry { id: String, entry: Entry }
+struct SavedEntry {
+    id: String,
+    entry: Entry,
+}
 
 #[tauri::command]
 fn save_entry(state: State<'_, AppState>, input: EntryInput) -> Result<String, String> {
@@ -1157,7 +1242,11 @@ fn save_entry_inner(state: &AppState, input: EntryInput) -> Result<SavedEntry, S
                 .iter_mut()
                 .find(|e| e.id == id && e.deleted_at.is_none())
                 .ok_or("글을 찾을 수 없습니다")?;
-            if input.expected_entry.as_ref().is_some_and(|expected| expected != entry) {
+            if input
+                .expected_entry
+                .as_ref()
+                .is_some_and(|expected| expected != entry)
+            {
                 return Err("다른 기기에서 이 기록이 변경되었습니다. 현재 편집 내용은 화면에 남아 있습니다. 내용을 복사한 뒤 다시 열어 확인해 주세요".into());
             }
             entry.journal_id = input.journal_id;
@@ -1169,7 +1258,10 @@ fn save_entry_inner(state: &AppState, input: EntryInput) -> Result<SavedEntry, S
             entry.location = input.location;
             entry.weather = input.weather;
             entry.updated_at = timestamp;
-            Ok(SavedEntry { id: entry.id.clone(), entry: entry.clone() })
+            Ok(SavedEntry {
+                id: entry.id.clone(),
+                entry: entry.clone(),
+            })
         } else {
             let entry = Entry {
                 journal_id: input.journal_id,
@@ -1183,7 +1275,10 @@ fn save_entry_inner(state: &AppState, input: EntryInput) -> Result<SavedEntry, S
                 ..Entry::default()
             };
             let id = entry.id.clone();
-            let saved = SavedEntry { id, entry: entry.clone() };
+            let saved = SavedEntry {
+                id,
+                entry: entry.clone(),
+            };
             store.entries.push(entry);
             Ok(saved)
         }
@@ -1430,6 +1525,9 @@ fn export_backup(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<St
     store.sync_base_nickname = None;
     store.media_manifests.clear();
     store.seen_remote_objects.clear();
+    store.pending_uploads.clear();
+    store.ignored_remote_objects.clear();
+    store.blocked_remote_object = None;
     store.remote_heads.clear();
     store.revision_parents.clear();
     let mut media = HashMap::new();
@@ -1848,6 +1946,23 @@ pub fn run() {
                 unlocked: AtomicBool::new(unlocked),
                 syncing: AtomicBool::new(false),
             });
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                interval.tick().await;
+                loop {
+                    interval.tick().await;
+                    let state = handle.state::<AppState>();
+                    if state.unlocked.load(Ordering::SeqCst)
+                        && connected_client_id(&state.data_dir).is_some()
+                        && state.store.lock().is_ok_and(|store| !store.sync_paused)
+                    {
+                        let result = drive_sync_now_inner(&state).await;
+                        let _ = handle.emit("niki-sync-finished", result.is_ok());
+                    }
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1883,6 +1998,8 @@ pub fn run() {
             drive_get_sync_key,
             drive_set_sync_key,
             drive_set_paused,
+            drive_skip_blocked_revision,
+            drive_retry_ignored_revisions,
             drive_sync_now,
             resolve_sync_conflict
         ])
@@ -2016,9 +2133,37 @@ mod tests {
         let dir = root.join(format!("niki-checked-save-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let journal = Journal::default();
-        let entry = Entry { journal_id: journal.id.clone(), body: "remote edit".into(), updated_at: "remote-version".into(), ..Entry::default() };
-        let state = AppState { data_dir: dir.clone(), store: Arc::new(Mutex::new(Store { journals: vec![journal.clone()], entries: vec![entry.clone()], ..Store::default() })), unlocked: AtomicBool::new(true), syncing: AtomicBool::new(false) };
-        let input = EntryInput { id: Some(entry.id.clone()), journal_id: journal.id, title: String::new(), body: "local draft".into(), date: "2026-10-29".into(), favorite: false, tags: vec![], location: String::new(), weather: String::new(), expected_entry: Some(Entry { body: "old content".into(), ..entry.clone() }) };
+        let entry = Entry {
+            journal_id: journal.id.clone(),
+            body: "remote edit".into(),
+            updated_at: "remote-version".into(),
+            ..Entry::default()
+        };
+        let state = AppState {
+            data_dir: dir.clone(),
+            store: Arc::new(Mutex::new(Store {
+                journals: vec![journal.clone()],
+                entries: vec![entry.clone()],
+                ..Store::default()
+            })),
+            unlocked: AtomicBool::new(true),
+            syncing: AtomicBool::new(false),
+        };
+        let input = EntryInput {
+            id: Some(entry.id.clone()),
+            journal_id: journal.id,
+            title: String::new(),
+            body: "local draft".into(),
+            date: "2026-10-29".into(),
+            favorite: false,
+            tags: vec![],
+            location: String::new(),
+            weather: String::new(),
+            expected_entry: Some(Entry {
+                body: "old content".into(),
+                ..entry.clone()
+            }),
+        };
         assert!(save_entry_inner(&state, input).is_err());
         assert_eq!(state.store.lock().unwrap().entries[0].body, "remote edit");
         fs::remove_dir_all(dir).unwrap();
@@ -2030,7 +2175,13 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let dir = root.join(format!("niki-checkpoint-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
-        let original = Store { entries: vec![Entry { body: "original".into(), ..Entry::default() }], ..Store::default() };
+        let original = Store {
+            entries: vec![Entry {
+                body: "original".into(),
+                ..Entry::default()
+            }],
+            ..Store::default()
+        };
         let live = Mutex::new(original.clone());
         let mut base = serde_json::to_value(&original).unwrap();
         let mut remote = original.clone();
@@ -2042,7 +2193,8 @@ mod tests {
         let current = live.lock().unwrap().clone();
         base = serde_json::to_value(&current).unwrap();
         commit_sync_checkpoint(&live, &dir, &mut base, &current).unwrap();
-        let saved: Store = serde_json::from_slice(&fs::read(dir.join("journal.json")).unwrap()).unwrap();
+        let saved: Store =
+            serde_json::from_slice(&fs::read(dir.join("journal.json")).unwrap()).unwrap();
         assert_eq!(saved.entries[0].body, "local edit");
         fs::remove_dir_all(dir).unwrap();
     }

@@ -87,7 +87,8 @@ async function autoSyncDrive(manual=false) {
     const editing=document.querySelector('.editor-inner')?.contains(document.activeElement);
     if(!editing && !saveDirty) render();
     else updateSyncIndicator(data.sync_conflicts?.length?'⚠ 확인 필요':'✓ 동기화됨');
-    if(manual) toast(result.warnings?.length?result.warnings[0]:'동기화가 완료되었습니다',Boolean(result.warnings?.length));
+    if(result.warnings?.length) toast(result.warnings[0],true);
+    else if(manual) toast('동기화가 완료되었습니다');
   } catch(e) {
     failed=true;
     try { await reload(); } catch(reloadError) { console.warn('Sync status refresh failed:',reloadError); }
@@ -105,7 +106,6 @@ async function autoSyncDrive(manual=false) {
   }
 }
 window.addEventListener('online',()=>scheduleAutoSync(1000));
-setInterval(()=>scheduleAutoSync(0),300000);
 async function startGoogleLogin(clientId='', clientSecret='', btn=null) {
   if(btn) btn.disabled = true;
   try {
@@ -218,6 +218,8 @@ function renderSyncSettings(pane) {
     +'<p><strong>마지막 동기화:</strong> '+esc(timeLabel(s.last_sync_at))
     +'</p>'
     +(s.last_sync_error ? '<p style="color:#b42318"><strong>최근 오류:</strong> '+esc(s.last_sync_error)+'</p>' : '')
+    +(s.blocked_remote_object ? '<p>원격 파일을 읽지 못해 동기화가 멈췄습니다. 암호 해독 오류라면 계정의 동기화 키 문제일 수도 있으므로 다른 기기의 기록과 백업을 먼저 확인하세요. 이 파일을 건너뛰면 해당 파일의 내용은 이 기기에 반영되지 않습니다.</p><button class="ghost danger" data-action="drive-skip-blocked" data-id="'+esc(s.blocked_remote_object)+'">문제 파일 건너뛰기</button>' : '')
+    +(s.ignored_remote_count ? '<p>건너뛴 원격 파일 '+s.ignored_remote_count+'개가 있습니다. Drive의 파일을 복구했다면 다시 확인할 수 있습니다.</p><button class="ghost" data-action="drive-retry-ignored">건너뛴 파일 다시 확인</button>' : '')
     +(data.pending_resolution_count ? '<p>충돌 해결 '+data.pending_resolution_count+'건이 다음 동기화 시 업로드됩니다.</p>' : '')
     +'<div class="panel-actions">'
     +'<button class="primary" data-action="drive-sync" '+(!s.connected||s.sync_paused?'disabled':'')+'>지금 동기화</button>'
@@ -461,6 +463,8 @@ document.addEventListener('click',async ev=>{const b=ev.target.closest('[data-ac
   else if(a==='google-login'){const cid=document.getElementById('drive-client-id')?.value?.trim()||'',sec=document.getElementById('drive-client-secret')?.value||'';if(!cid&&!data.sync_status?.has_oauth_client){const det=document.querySelector('.oauth-details');if(det)det.open=true;document.getElementById('drive-client-id')?.focus();toast('Google Cloud에서 발급받은 OAuth 클라이언트 ID를 먼저 입력해 주세요',true);return;}await startGoogleLogin(cid,sec,b);}
   else if(a==='drive-disconnect'){await invoke('drive_disconnect');visibleSyncKey='';await reload();toast('Google 계정에서 로그아웃되었습니다');render();}
   else if(a==='drive-sync'){b.disabled=true;try{await autoSyncDrive(true);}finally{b.disabled=false;}}
+  else if(a==='drive-skip-blocked'&&confirm('문제 파일의 내용은 이 기기에 반영되지 않습니다. 백업을 확인한 뒤 정말 건너뛰시겠습니까?')){await invoke('drive_skip_blocked_revision',{objectId:id});await reload();render();await autoSyncDrive(true);}
+  else if(a==='drive-retry-ignored'){await invoke('drive_retry_ignored_revisions');await reload();render();await autoSyncDrive(true);}
   else if(a==='drive-toggle-pause'){await invoke('drive_set_paused',{paused:!data.sync_status?.sync_paused});await reload();render();toast(data.sync_status?.sync_paused?'동기화가 일시 중지되었습니다':'동기화가 재개되었습니다');if(!data.sync_status?.sync_paused)scheduleAutoSync(0);}
   else if(a==='drive-show-key'){if(visibleSyncKey){visibleSyncKey='';render();}else{const k=await invoke('drive_get_sync_key');if(!k)toast('설정된 복구 키가 없습니다. 먼저 생성하거나 입력하세요',true);else{visibleSyncKey=k;render();}}}
   else if(a==='drive-generate-key'){if(!data.sync_status?.has_sync_key||confirm('새 복구 키를 생성하면 기존 원격 암호화 파일과 키가 달라집니다. 계속할까요?')){visibleSyncKey=await invoke('drive_generate_sync_key');await reload();render();toast('새 복구 키가 생성되었습니다. 안전한 곳에 보관하세요');}}
@@ -533,4 +537,15 @@ document.addEventListener('click',async ev=>{
     document.body.appendChild(popup);
   }catch(e){fail(e);}
 });
-if(window.__TAURI__?.core?.invoke){reload().then(()=>{render();autoCheckUpdate();autoSyncDrive();}).catch(fail);}else app.innerHTML='<div class="empty"><h2>데스크톱 앱에서 열어 주세요</h2></div>';
+if(window.__TAURI__?.core?.invoke){
+  window.__TAURI__.event?.listen?.('niki-sync-finished',async()=>{
+    if(syncRunning) return;
+    try {
+      await reload();
+      const editing=document.querySelector('.editor-inner')?.contains(document.activeElement);
+      if(!editing && !saveDirty) render();
+      else updateSyncIndicator(data.sync_status?.last_sync_error?'⚠ 확인 필요':data.sync_conflicts?.length?'⚠ 확인 필요':'✓ 동기화됨');
+    } catch(error) { console.warn('Background sync status refresh failed:',error); }
+  });
+  reload().then(()=>{render();autoCheckUpdate();autoSyncDrive();}).catch(fail);
+}else app.innerHTML='<div class="empty"><h2>데스크톱 앱에서 열어 주세요</h2></div>';
