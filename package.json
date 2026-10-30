@@ -2,6 +2,9 @@
   "name": "niki",
   "version": "1.0.0",
   "description": "Niki React desktop interface build and tests",
+  "engines": {
+    "node": ">=26 <27"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && node scripts/build-ui.cjs && node scripts/editor-licenses.cjs",

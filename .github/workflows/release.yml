@@ -29,17 +29,21 @@ jobs:
       win_sha256: ${{ steps.build.outputs.sha256 }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version-file: .nvmrc
+          check-latest: true
           cache: npm
 
       - name: Verify React UI build and behavior
         shell: pwsh
         run: |
+          $nodeVersion = node -p "process.versions.node"
+          if (-not $nodeVersion.StartsWith("26.")) { throw "Node.js 26 is required; found $nodeVersion" }
+          Write-Host "Using Node.js $nodeVersion"
           npm ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build
@@ -106,7 +110,7 @@ jobs:
           "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-release
           path: target/release/Niki_Setup.exe
@@ -118,7 +122,7 @@ jobs:
       mac_sha256: ${{ steps.build.outputs.sha256 }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust stable toolchain (Universal targets)
         uses: dtolnay/rust-toolchain@stable
@@ -169,7 +173,7 @@ jobs:
           echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
 
       - name: Upload macOS artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-release
           path: target/release/Niki_macOS.dmg
@@ -180,7 +184,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -237,7 +241,7 @@ jobs:
             }' > dist/latest.json
 
       - name: Publish to GitHub Releases
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.build-windows.outputs.tag }}
           name: Niki ${{ needs.build-windows.outputs.tag }}
