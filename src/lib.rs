@@ -1958,6 +1958,55 @@ mod tests {
         assert!(store.entries[1].attachments.is_empty());
     }
     #[test]
+    fn backup_round_trip_preserves_formatted_entry_and_attachment() {
+        let test_root = std::env::current_dir().unwrap().join("dev-data");
+        fs::create_dir_all(&test_root).unwrap();
+        let dir = test_root.join(format!("niki-backup-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(dir.join("media")).unwrap();
+        let state = AppState {
+            data_dir: dir.clone(),
+            store: Mutex::new(Store::default()),
+            unlocked: AtomicBool::new(true),
+            syncing: AtomicBool::new(false),
+        };
+        let journal = Journal::default();
+        let attachment_id = Uuid::new_v4().to_string();
+        let bytes = b"\x89PNG\r\n\x1a\nexample";
+        let body = "## 오늘\n**기억**과 *생각*\n\n- [x] 산책\n- [ ] 독서";
+        let entry = Entry {
+            journal_id: journal.id.clone(),
+            body: body.into(),
+            attachments: vec![Attachment {
+                id: attachment_id.clone(),
+                name: "photo.png".into(),
+                mime: "image/png".into(),
+                bytes: bytes.len(),
+            }],
+            ..Entry::default()
+        };
+        let backup = Backup {
+            format: "niki-journal-backup-v1".into(),
+            store: Store {
+                journals: vec![journal],
+                entries: vec![entry],
+                ..Store::default()
+            },
+            media: HashMap::from([(attachment_id, B64.encode(bytes))]),
+        };
+        let decoded: Backup =
+            serde_json::from_slice(&serde_json::to_vec(&backup).unwrap()).unwrap();
+        let result = import_own_backup(&state, decoded).unwrap();
+        assert_eq!((result.entries_added, result.media_added), (1, 1));
+        let saved = state.store.lock().unwrap();
+        assert_eq!(saved.entries[0].body, body);
+        assert_eq!(
+            fs::read(media_path(&state, &saved.entries[0].attachments[0].id)).unwrap(),
+            bytes
+        );
+        drop(saved);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
     fn imports_day_one_text_and_skips_duplicate_uuid() {
         let test_root = std::env::current_dir().unwrap().join("dev-data");
         fs::create_dir_all(&test_root).unwrap();

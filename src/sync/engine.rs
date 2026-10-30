@@ -831,7 +831,7 @@ mod tests {
             id: "entry-1".into(),
             journal_id: journal_a.id.clone(),
             title: "첫 번째 일기".into(),
-            body: "사진과 함께 남긴 기록".into(),
+            body: "## 오늘\n**사진**과 함께 남긴 기록\n\n- [x] 산책\n- [ ] 독서".into(),
             date: "2026-10-29".into(),
             tags: vec!["여행".into()],
             attachments: vec![Attachment {
@@ -880,6 +880,10 @@ mod tests {
         let sum_b1 = sync_with_transport(&mut store_b, &dir_b, &client, |_| Ok(())).unwrap();
         assert_eq!(sum_b1.restored_media, 1);
         assert_eq!(store_b.entries.len(), 2);
+        assert_eq!(
+            store_b.entries.iter().find(|e| e.id == entry_a.id).unwrap().body,
+            entry_a.body
+        );
         assert_eq!(store_b.templates.len(), 1);
         assert_eq!(
             fs::read(dir_b.join("media").join(&att_id)).unwrap(),
@@ -902,6 +906,10 @@ mod tests {
         let sum_c = sync_with_transport(&mut store_c, &dir_c, &client, |_| Ok(())).unwrap();
         assert_eq!(sum_c.restored_media, 1);
         assert_eq!(store_c.entries.len(), 2);
+        assert_eq!(
+            store_c.entries.iter().find(|e| e.id == entry_a.id).unwrap().body,
+            entry_a.body
+        );
         assert_eq!(store_c.templates.len(), 1);
         assert_eq!(
             fs::read(dir_c.join("media").join(&att_id)).unwrap(),
