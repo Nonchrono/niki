@@ -1,4 +1,4 @@
-const syncMutations = new Set(['save_entry','save_entry_checked','save_journal','delete_journal','trash_entry','restore_entry','empty_trash','save_template','delete_template','add_attachment','remove_attachment','import_data','resolve_sync_conflict','set_nickname']);
+const syncMutations = new Set(['save_entry','save_entry_checked','save_journal','delete_journal','trash_entry','restore_entry','empty_trash','save_template','delete_template','add_attachment','add_inline_image','remove_attachment','import_data','resolve_sync_conflict','set_nickname']);
 const invoke = async (name, args = {}) => {
   const result=await window.__TAURI__.core.invoke(name,args);
   if(syncMutations.has(name)) scheduleAutoSync();
@@ -8,6 +8,7 @@ const app = document.getElementById('app');
 const toastBox = document.getElementById('toast');
 const importFile = document.getElementById('import-file');
 const attachFile = document.getElementById('attach-file');
+const inlineImageFile = document.getElementById('inline-image-file');
 const GOOGLE_ICON = '<svg class="google-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z"/><path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09C3.26 21.3 7.31 24 12 24z"/><path fill="#FBBC05" d="M5.27 14.29c-.25-.72-.38-1.49-.38-2.29s.13-1.57.38-2.29V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.98-3.09z"/><path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.98 3.09c.95-2.85 3.6-4.96 6.73-4.96z"/></svg>';
 const mdi = path => '<svg class="mdi-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="'+path+'"/></svg>';
 const MDI = {
@@ -24,7 +25,7 @@ const MDI = {
 let data = {locked:false,lock_enabled:false,app_version:'0.1.0',updater_config:{endpoint:'',pubkey:'',auto_check:true,skipped_version:''},journals:[],entries:[],templates:[],sync_conflicts:[],pending_resolution_count:0,sync_status:{},synced_entry_ids:[]};
 let journal = 'all', entryId = null, view = 'timeline', search = '', tag = '', favorites = false, dateFilter = '';
 let month = new Date(new Date().getFullYear(),new Date().getMonth(),1);
-let saveTimer = null, savePromise = null, saveDirty = false, richEditor = null, editingEntry = null, saveConflict = false, visibleSyncKey = '', settingsTab = 'sync', sidebarCollapsed = false;
+let saveTimer = null, savePromise = null, saveDirty = false, richEditor = null, editingEntry = null, saveConflict = false, visibleSyncKey = '', settingsTab = 'sync', sidebarCollapsed = false, imageUploadTask = null;
 let updateInfo = null, updateDismissed = false, generatedKeyPair = null, generatedManifest = '';
 let syncTimer=null, syncRunning=false, syncQueued=false, retryDelay=15000, draftWarningShown=false;
 const media = new Map();
@@ -85,7 +86,7 @@ async function autoSyncDrive(manual=false) {
     await reload();
     retryDelay=15000;
     const editing=document.querySelector('.editor-inner')?.contains(document.activeElement);
-    if(!editing && !saveDirty) render();
+    if(!editing && !saveDirty && !imageUploadTask) render();
     else updateSyncIndicator(data.sync_conflicts?.length?'⚠ 확인 필요':'✓ 동기화됨');
     if(result.warnings?.length) toast(result.warnings[0],true);
     else if(manual) toast('동기화가 완료되었습니다');
@@ -93,7 +94,7 @@ async function autoSyncDrive(manual=false) {
     failed=true;
     try { await reload(); } catch(reloadError) { console.warn('Sync status refresh failed:',reloadError); }
     const editing=document.querySelector('.editor-inner')?.contains(document.activeElement);
-    if(!editing && !saveDirty) render();
+    if(!editing && !saveDirty && !imageUploadTask) render();
     updateSyncIndicator('⚠ 확인 필요');
     if(manual) throw e;
     console.warn('Auto sync failed:',e);
@@ -214,7 +215,6 @@ function renderSyncSettings(pane) {
   syncCard.className='panel-card';
   syncCard.innerHTML='<h3>동기화 상태 <span class="sync-badge '+(s.sync_paused?'paused':'')+'">'+(s.sync_paused?'일시 중지':'자동 동기화')+'</span></h3>'
     +'<p><strong>계정 상태:</strong> '+esc(accountLabel(s))+'</p>'
-    +'<p>동기화 키는 이 Google Drive 계정에 자동 보관됩니다. 같은 계정의 모든 기기를 최신 버전으로 업데이트해 주세요.</p>'
     +'<p><strong>마지막 동기화:</strong> '+esc(timeLabel(s.last_sync_at))
     +'</p>'
     +(s.last_sync_error ? '<p style="color:#b42318"><strong>최근 오류:</strong> '+esc(s.last_sync_error)+'</p>' : '')
@@ -248,7 +248,8 @@ function editor() {
   pane.innerHTML='<div class="editor-inner"><div class="editor-top"><span class="status" id="save-status">모든 변경 사항 저장됨'+esc(entrySyncBadge(e.id))+'</span><span class="spacer"></span><button class="icon-button" data-action="favorite-entry" title="즐겨찾기">'+(e.favorite?'♥':'♡')+'</button><button class="ghost" data-action="print">인쇄 / PDF</button><button class="icon-button" data-action="entry-menu" title="기록 메뉴" aria-label="기록 메뉴" aria-haspopup="menu">⋯</button></div><input class="editor-title" id="entry-title" placeholder="제목 없는 기록" value="'+esc(e.title)+'"><div class="editor-meta"><span class="date-control"><input id="entry-date" type="hidden" value="'+esc(e.date)+'"><button class="date-trigger" data-action="date-picker" aria-label="기록 날짜 선택" aria-haspopup="dialog">◷ ' +esc(dateLabel(e.date))+' ▾</button><span id="date-picker"></span></span><span>◈ <select id="entry-journal" aria-label="일기장">'+data.journals.map(j=>'<option value="'+esc(j.id)+'" '+(j.id===e.journal_id?'selected':'')+'>'+esc(j.name)+'</option>').join('')+'</select></span><span>⌗ <input id="entry-tags" placeholder="태그, 쉼표 구분" value="'+esc(e.tags.join(', '))+'"></span></div><div class="toolbar" aria-label="본문 서식">'+[['bold','B','굵게'],['italic','I','기울임'],['heading','H','제목'],['quote','❞','인용'],['list','☷','글머리 목록'],['check','☑','체크리스트']].map(x=>'<button class="tool" data-action="format" data-format="'+x[0]+'" title="'+x[2]+'" aria-label="'+x[2]+'">'+x[1]+'</button>').join('')+'<span class="tool sep"></span><button class="tool" data-action="attach" title="첨부" aria-label="첨부">📎</button><select id="insert-template" class="filter-select" aria-label="템플릿 삽입"><option value="">템플릿</option>'+data.templates.map(t=>'<option value="'+esc(t.id)+'">'+esc(t.name)+'</option>').join('')+'</select></div><div id="entry-body"></div>'+'<div class="attach-grid">'+e.attachments.map(a=>'<div class="attach-tile" id="att-'+esc(a.id)+'"><span>'+esc(a.name)+'</span><button data-action="remove-attachment" data-id="'+esc(a.id)+'" title="삭제">×</button></div>').join('')+'</div><div class="extra-fields"><label>장소<input id="entry-location" placeholder="장소" value="'+esc(e.location)+'"></label><label>날씨 / 메모<input id="entry-weather" placeholder="날씨" value="'+esc(e.weather)+'"></label></div></div>';
   if(richEditor) richEditor.destroy();
   editingEntry=structuredClone(e);saveConflict=false;
-  richEditor=window.NikiEditor.create(document.getElementById('entry-body'),e.body,scheduleSave);
+  richEditor=window.NikiEditor.create(document.getElementById('entry-body'),e.body,scheduleSave,getMedia);
+  pane.querySelector('[data-action="attach"]').insertAdjacentHTML('beforebegin','<button class="tool image-tool" data-action="insert-image" title="본문에 이미지 넣기" aria-label="본문에 이미지 넣기">▧ 이미지</button>');
   if(richEditor.source) pane.querySelectorAll('[data-action="format"]').forEach(button=>button.disabled=true);
   restoreEditorDraft(e,pane);
   e.attachments.filter(a=>a.mime.startsWith('image/')).forEach(async a=>{try{const url=await getMedia(a.id), box=document.getElementById('att-'+a.id); if(box){const img=document.createElement('img');img.src=url;img.alt=a.name;box.prepend(img);}}catch(x){console.warn(x);}});
@@ -378,7 +379,7 @@ function restoreEditorDraft(e,pane) {
   const favorite=pane.querySelector('[data-action="favorite-entry"]');if(favorite)favorite.textContent=draft.favorite?'♥':'♡';
   richEditor.destroy();document.getElementById('entry-body').replaceChildren();
   editingEntry=draft.expectedEntry;
-  richEditor=window.NikiEditor.create(document.getElementById('entry-body'),draft.body,scheduleSave);
+  richEditor=window.NikiEditor.create(document.getElementById('entry-body'),draft.body,scheduleSave,getMedia);
   pane.querySelectorAll('[data-action="format"]').forEach(button=>button.disabled=richEditor.source);
   scheduleSave();
 }
@@ -390,7 +391,8 @@ function scheduleSave() {
   clearTimeout(saveTimer);
   saveTimer=setTimeout(()=>{saveCurrent();},550);
 }
-async function saveCurrent() {
+async function saveCurrent(duringImageUpload=false) {
+  if(imageUploadTask&&!duringImageUpload){try{await imageUploadTask;}catch{return false;}}
   clearTimeout(saveTimer); saveTimer=null;
   if(savePromise) { if(!await savePromise) return false; }
   while(saveDirty) {
@@ -425,6 +427,7 @@ async function saveCurrent() {
   return true;
 }
 async function leave() {
+  if(imageUploadTask) await imageUploadTask;
   if((saveDirty||savePromise||saveTimer) && !await saveCurrent()) throw new Error('저장하지 못했습니다. 다시 시도해 주세요.');
 }
 async function newEntry() { await leave(); const journalId=journal==='all'?data.journals[0]?.id:journal; if(!journalId)return toast('일지가 없습니다',true); entryId=await invoke('save_entry',{input:{journalId,title:'',body:'',date:localDate(),favorite:false,tags:[],location:'',weather:''}}); await reload(); view='timeline'; dateFilter=''; render(); document.getElementById('entry-title')?.focus(); }
@@ -488,6 +491,7 @@ document.addEventListener('click',async ev=>{const b=ev.target.closest('[data-ac
     await reload();render();toast('편집 내용을 별도 기록으로 저장했습니다');
   }
   else if(a==='format')format(b.dataset.format);
+  else if(a==='insert-image'){richEditor?.rememberSelection();inlineImageFile.click();}
   else if(a==='attach')attachFile.click(); else if(a==='print'){await leave();window.print();}
   else if(a==='entry-menu'){openEntryMenu(b);}
   else if(a==='date-picker'){openDatePicker();}
@@ -513,6 +517,40 @@ document.addEventListener('change',async ev=>{if(ev.target.id==='date-direct'){s
 document.addEventListener('keydown',ev=>{const mod=ev.ctrlKey||ev.metaKey;if(ev.key==='Escape'){closeContextMenu();closeDatePicker();}if(ev.key==='Enter'&&ev.target.id==='unlock-password')document.querySelector('[data-action="unlock"]')?.click();if(ev.key==='Enter'&&ev.target.id==='profile-nickname')document.querySelector('[data-action="save-nickname"]')?.click();if(mod&&ev.key.toLowerCase()==='n'){ev.preventDefault();newEntry().catch(fail);}if(mod&&ev.key.toLowerCase()==='s'){ev.preventDefault();saveCurrent().then(ok=>{if(ok)toast('저장했습니다');});}});
 importFile.addEventListener('change',async()=>{const f=importFile.files?.[0];if(!f)return;try{toast('가져오는 중…');const result=await invoke('import_data',{name:f.name,data:await toBase64(f)});await reload();render();toast(result.entries_added+'개 글, '+result.media_added+'개 첨부 가져옴'+(result.warnings.length?' · 경고 '+result.warnings.length+'건':''));if(result.warnings.length)console.warn(result.warnings);}catch(e){fail(e);}finally{importFile.value='';}});
 attachFile.addEventListener('change',async()=>{const id=entryId;if(!id)return;try{await leave();for(const f of attachFile.files||[]){await invoke('add_attachment',{entryId:id,name:f.name,mime:f.type||'application/octet-stream',data:await toBase64(f)});}await reload();editor();toast('첨부 파일 저장됨');}catch(e){fail(e);}finally{attachFile.value='';}});
+function appendImageTile(attachment) {
+  const grid=document.querySelector('.attach-grid');
+  if(!grid||document.getElementById('att-'+attachment.id))return;
+  const tile=document.createElement('div');tile.className='attach-tile';tile.id='att-'+attachment.id;
+  const image=document.createElement('img');image.src=media.get(attachment.id);image.alt=attachment.name;
+  const label=document.createElement('span');label.textContent=attachment.name;
+  const remove=document.createElement('button');remove.dataset.action='remove-attachment';remove.dataset.id=attachment.id;remove.title='삭제';remove.textContent='×';
+  tile.append(image,label,remove);grid.appendChild(tile);
+}
+inlineImageFile.addEventListener('change',async()=>{
+  const file=inlineImageFile.files?.[0],id=entryId;
+  if(!file||!id){inlineImageFile.value='';return;}
+  let activeEditor;
+  try {
+    if(file.size>20_000_000)throw new Error('본문 이미지는 20 MB 이하만 넣을 수 있습니다');
+    await leave();
+    activeEditor=richEditor;
+    activeEditor?.setEditable(false);
+    imageUploadTask=(async()=>{
+      const encoded=await toBase64(file);
+      const added=await invoke('add_inline_image',{entryId:id,name:file.name,mime:file.type||'application/octet-stream',data:encoded});
+      if(entryId!==id||richEditor!==activeEditor)throw new Error('이미지를 넣던 기록이 변경됐습니다. 첨부 목록에서 파일을 확인하세요');
+      editingEntry=added.entry;
+      media.set(added.attachment.id,'data:'+added.attachment.mime+';base64,'+encoded);
+      activeEditor.setEditable(true);
+      if(!activeEditor.insertImage(added.attachment.id,added.attachment.name))throw new Error('이미지를 본문에 넣지 못했습니다. 첨부 목록에서 파일을 확인하세요');
+      if(!await saveCurrent(true))throw new Error('이미지 첨부는 저장됐지만 본문 저장을 확인해야 합니다');
+      appendImageTile(added.attachment);
+    })();
+    await imageUploadTask;
+    toast('본문에 이미지를 넣었습니다');
+  } catch(error) {fail(error);}
+  finally {imageUploadTask=null;activeEditor?.setEditable(true);inlineImageFile.value='';}
+});
 document.addEventListener('click',async ev=>{
   const tile=ev.target.closest('.attach-tile');
   if(!tile||ev.target.closest('button'))return;
@@ -543,7 +581,7 @@ if(window.__TAURI__?.core?.invoke){
     try {
       await reload();
       const editing=document.querySelector('.editor-inner')?.contains(document.activeElement);
-      if(!editing && !saveDirty) render();
+      if(!editing && !saveDirty && !imageUploadTask) render();
       else updateSyncIndicator(data.sync_status?.last_sync_error?'⚠ 확인 필요':data.sync_conflicts?.length?'⚠ 확인 필요':'✓ 동기화됨');
     } catch(error) { console.warn('Background sync status refresh failed:',error); }
   });

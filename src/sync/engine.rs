@@ -1301,7 +1301,7 @@ mod tests {
             id: "entry-1".into(),
             journal_id: journal_a.id.clone(),
             title: "첫 번째 일기".into(),
-            body: "## 오늘\n**사진**과 함께 남긴 기록\n\n- [x] 산책\n- [ ] 독서".into(),
+            body: format!("## 오늘\n**사진**과 함께 남긴 기록\n\n![photo.png](niki-media:{att_id})\n\n- [x] 산책\n- [ ] 독서"),
             date: "2026-10-29".into(),
             tags: vec!["여행".into()],
             attachments: vec![Attachment {

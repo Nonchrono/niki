@@ -1410,15 +1410,48 @@ fn add_attachment(
     mime: String,
     data: String,
 ) -> Result<Attachment, String> {
+    store_attachment(&state, entry_id, name, mime, data, false).map(|(attachment, _)| attachment)
+}
+
+#[derive(Serialize)]
+struct AddedInlineImage {
+    attachment: Attachment,
+    entry: Entry,
+}
+
+#[tauri::command]
+fn add_inline_image(
+    state: State<'_, AppState>,
+    entry_id: String,
+    name: String,
+    mime: String,
+    data: String,
+) -> Result<AddedInlineImage, String> {
+    let (attachment, entry) = store_attachment(&state, entry_id, name, mime, data, true)?;
+    Ok(AddedInlineImage { attachment, entry })
+}
+
+fn store_attachment(
+    state: &AppState,
+    entry_id: String,
+    name: String,
+    mime: String,
+    data: String,
+    inline_image: bool,
+) -> Result<(Attachment, Entry), String> {
     ensure_unlocked(&state)?;
-    if data.len() > 140_000_000 {
-        return Err("파일은 100 MB 이하만 첨부할 수 있습니다".into());
+    let limit = if inline_image { 20_000_000 } else { 100_000_000 };
+    if data.len() > (limit * 4 / 3) + 8 {
+        return Err(format!("파일은 {} MB 이하만 첨부할 수 있습니다", limit / 1_000_000));
     }
     let bytes = B64.decode(data.as_bytes()).map_err(err)?;
-    if bytes.len() > 100_000_000 {
-        return Err("파일은 100 MB 이하만 첨부할 수 있습니다".into());
+    if bytes.len() > limit {
+        return Err(format!("파일은 {} MB 이하만 첨부할 수 있습니다", limit / 1_000_000));
     }
     let mime = safe_mime(&mime, &bytes).to_string();
+    if inline_image && !mime.starts_with("image/") {
+        return Err("본문에 넣을 수 있는 이미지는 PNG, JPEG, GIF, WebP입니다".into());
+    }
     let attachment = Attachment {
         id: Uuid::new_v4().to_string(),
         name: name.chars().take(200).collect(),
@@ -1435,12 +1468,12 @@ fn add_attachment(
             .ok_or("글을 찾을 수 없습니다")?;
         entry.attachments.push(attachment.clone());
         entry.updated_at = now();
-        Ok(attachment.clone())
+        Ok(entry.clone())
     });
     if result.is_err() {
         let _ = fs::remove_file(path);
     }
-    result
+    result.map(|entry| (attachment, entry))
 }
 
 #[tauri::command]
@@ -1470,14 +1503,32 @@ fn detach_attachment(store: &mut Store, entry_id: &str, attachment_id: &str) -> 
         .iter_mut()
         .find(|e| e.id == entry_id)
         .ok_or("글을 찾을 수 없습니다")?;
+    let cleaned_body = strip_inline_image(&entry.body, attachment_id)?;
     let position = entry
         .attachments
         .iter()
         .position(|a| a.id == attachment_id)
         .ok_or("이 글의 첨부 파일을 찾을 수 없습니다")?;
     entry.attachments.remove(position);
+    entry.body = cleaned_body;
     entry.updated_at = now();
     Ok(())
+}
+
+fn strip_inline_image(body: &str, attachment_id: &str) -> Result<String, String> {
+    let suffix = format!("](niki-media:{attachment_id})");
+    let mut cleaned = body.to_string();
+    while let Some(end_start) = cleaned.find(&suffix) {
+        let Some(start) = cleaned[..end_start].rfind("![") else {
+            return Err("본문 이미지 참조를 안전하게 제거할 수 없습니다".into());
+        };
+        let alt = &cleaned[start + 2..end_start];
+        if alt.chars().count() > 200 || alt.chars().any(|c| c == ']' || c == '\n' || c == '\r') {
+            return Err("본문 이미지 참조를 안전하게 제거할 수 없습니다".into());
+        }
+        cleaned.replace_range(start..end_start + suffix.len(), "");
+    }
+    Ok(cleaned)
 }
 
 #[derive(Serialize)]
@@ -1618,6 +1669,7 @@ fn import_own_backup(state: &AppState, backup: Backup) -> Result<ImportResult, S
                 continue;
             }
             for attachment in &mut entry.attachments {
+                let old_id = attachment.id.clone();
                 let encoded = backup
                     .media
                     .get(&attachment.id)
@@ -1629,6 +1681,10 @@ fn import_own_backup(state: &AppState, backup: Backup) -> Result<ImportResult, S
                 attachment.mime = safe_mime(&attachment.mime, &bytes).to_string();
                 attachment.bytes = bytes.len();
                 attachment.id = Uuid::new_v4().to_string();
+                entry.body = entry.body.replace(
+                    &format!("](niki-media:{old_id})"),
+                    &format!("](niki-media:{})", attachment.id),
+                );
                 let path = media_path(state, &attachment.id);
                 fs::write(&path, bytes).map_err(err)?;
                 written.push(path);
@@ -1988,6 +2044,7 @@ pub fn run() {
             save_template,
             delete_template,
             add_attachment,
+            add_inline_image,
             remove_attachment,
             get_attachment,
             export_backup,
@@ -2214,10 +2271,10 @@ mod tests {
         let journal = Journal::default();
         let attachment_id = Uuid::new_v4().to_string();
         let bytes = b"\x89PNG\r\n\x1a\nexample";
-        let body = "## 오늘\n**기억**과 *생각*\n\n- [x] 산책\n- [ ] 독서";
+        let body = format!("## 오늘\n**기억**과 *생각*\n\n![photo.png](niki-media:{attachment_id})\n\n- [x] 산책\n- [ ] 독서");
         let entry = Entry {
             journal_id: journal.id.clone(),
-            body: body.into(),
+            body: body.clone(),
             attachments: vec![Attachment {
                 id: attachment_id.clone(),
                 name: "photo.png".into(),
@@ -2233,19 +2290,50 @@ mod tests {
                 entries: vec![entry],
                 ..Store::default()
             },
-            media: HashMap::from([(attachment_id, B64.encode(bytes))]),
+            media: HashMap::from([(attachment_id.clone(), B64.encode(bytes))]),
         };
         let decoded: Backup =
             serde_json::from_slice(&serde_json::to_vec(&backup).unwrap()).unwrap();
         let result = import_own_backup(&state, decoded).unwrap();
         assert_eq!((result.entries_added, result.media_added), (1, 1));
         let saved = state.store.lock().unwrap();
-        assert_eq!(saved.entries[0].body, body);
+        let restored_id = &saved.entries[0].attachments[0].id;
+        assert_ne!(restored_id, &attachment_id);
+        assert!(saved.entries[0].body.contains(&format!("![photo.png](niki-media:{restored_id})")));
+        assert!(!saved.entries[0].body.contains(&format!("niki-media:{attachment_id}")));
         assert_eq!(
             fs::read(media_path(&state, &saved.entries[0].attachments[0].id)).unwrap(),
             bytes
         );
         drop(saved);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn inline_image_requires_real_image_and_removes_body_reference_with_attachment() {
+        let test_root = std::env::current_dir().unwrap().join("dev-data");
+        fs::create_dir_all(&test_root).unwrap();
+        let dir = test_root.join(format!("niki-inline-image-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(dir.join("media")).unwrap();
+        let journal = Journal::default();
+        let entry = Entry { journal_id: journal.id.clone(), ..Entry::default() };
+        let entry_id = entry.id.clone();
+        let state = AppState {
+            data_dir: dir.clone(),
+            store: Arc::new(Mutex::new(Store { journals: vec![journal], entries: vec![entry], ..Store::default() })),
+            unlocked: AtomicBool::new(true),
+            syncing: AtomicBool::new(false),
+        };
+        assert!(store_attachment(&state, entry_id.clone(), "fake.png".into(), "image/png".into(), B64.encode(b"not an image"), true).is_err());
+        let bytes = b"\x89PNG\r\n\x1a\ntest";
+        let (attachment, _) = store_attachment(&state, entry_id.clone(), "real.png".into(), "image/png".into(), B64.encode(bytes), true).unwrap();
+        mutate(&state, |store| {
+            store.entries[0].body = format!("앞 ![real.png](niki-media:{}) 뒤", attachment.id);
+            detach_attachment(store, &entry_id, &attachment.id)
+        }).unwrap();
+        let store = state.store.lock().unwrap();
+        assert_eq!(store.entries[0].body, "앞  뒤");
+        assert!(store.entries[0].attachments.is_empty());
+        drop(store);
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
