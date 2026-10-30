@@ -1111,7 +1111,9 @@ fn updater_create_manifest(
 #[tauri::command]
 async fn install_app_to_pc(state: State<'_, AppState>) -> Result<String, String> {
     ensure_unlocked(&state)?;
-    let path = tauri::async_runtime::spawn_blocking(|| app_installer::run_installer_ui(true))
+    let path = tauri::async_runtime::spawn_blocking(|| {
+        app_installer::run_installer_ui(!cfg!(target_os = "windows"))
+    })
         .await
         .map_err(err)??;
     if !app_installer::is_running_from_installed_location() {
@@ -1949,11 +1951,14 @@ pub fn run() {
     app_installer::ensure_release_setup_binary();
     match app_installer::detect_startup_mode() {
         app_installer::StartupMode::Install { silent } => {
-            if let Err(e) = app_installer::run_installer_ui(silent)
-                && !silent
-                && !e.contains("취소")
-            {
-                app_installer::error_dialog("Niki 설치 오류", &e);
+            if let Err(e) = app_installer::run_installer_ui(silent) {
+                if silent {
+                    eprintln!("Niki 설치 오류: {e}");
+                    std::process::exit(1);
+                }
+                if !e.contains("취소") {
+                    app_installer::error_dialog("Niki 설치 오류", &e);
+                }
             }
             return;
         }

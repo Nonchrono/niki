@@ -7,6 +7,8 @@ use std::{
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
+use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::PermissionsExt;
@@ -24,10 +26,83 @@ const APP_ICON_ICNS: &[u8] = include_bytes!("../../icons/icon.icns");
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(target_os = "windows")]
-pub fn install_dir() -> Result<PathBuf, String> {
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct WindowsInstallSettings {
+    directory: PathBuf,
+    desktop_shortcut: bool,
+}
+
+#[cfg(target_os = "windows")]
+fn local_app_data() -> Result<PathBuf, String> {
     let local_app_data = env::var_os("LOCALAPPDATA")
         .ok_or("LOCALAPPDATA 환경 변수를 찾을 수 없습니다.")?;
-    Ok(PathBuf::from(local_app_data).join("Programs").join("Niki"))
+    Ok(PathBuf::from(local_app_data))
+}
+
+#[cfg(target_os = "windows")]
+fn default_windows_install_dir() -> Result<PathBuf, String> {
+    Ok(local_app_data()?.join("Programs").join("Niki"))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_install_settings_path() -> Result<PathBuf, String> {
+    Ok(local_app_data()?.join("Niki").join("install-settings.json"))
+}
+
+#[cfg(target_os = "windows")]
+fn validate_windows_install_dir(directory: &Path) -> Result<(), String> {
+    if !directory.is_absolute()
+        || directory.file_name().is_none()
+        || directory
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+        || directory.to_string_lossy().starts_with(r"\\")
+    {
+        return Err("설치 위치는 로컬 드라이브의 일반 폴더를 선택해 주세요.".into());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn read_windows_install_settings() -> Option<WindowsInstallSettings> {
+    let path = windows_install_settings_path().ok()?;
+    let settings: WindowsInstallSettings = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+    validate_windows_install_dir(&settings.directory).ok()?;
+    Some(settings)
+}
+
+#[cfg(target_os = "windows")]
+fn save_windows_install_settings(settings: &WindowsInstallSettings) -> Result<(), String> {
+    let path = windows_install_settings_path()?;
+    fs::create_dir_all(path.parent().ok_or("설치 설정 폴더가 없습니다.")?)
+        .map_err(|e| format!("설치 설정 폴더 생성 실패: {e}"))?;
+    fs::write(&path, serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("설치 설정 저장 실패: {e}"))
+}
+
+#[cfg(target_os = "windows")]
+fn current_windows_install_settings() -> Result<WindowsInstallSettings, String> {
+    if env::var("NIKI_INSTALL_FROM_WIZARD").as_deref() == Ok("1") {
+        let directory = PathBuf::from(
+            env::var_os("NIKI_INSTALL_DIR").ok_or("선택한 설치 위치를 찾을 수 없습니다.")?,
+        );
+        validate_windows_install_dir(&directory)?;
+        return Ok(WindowsInstallSettings {
+            directory,
+            desktop_shortcut: env::var("NIKI_DESKTOP_SHORTCUT").as_deref() == Ok("1"),
+        });
+    }
+    read_windows_install_settings()
+        .map(Ok)
+        .unwrap_or_else(|| Ok(WindowsInstallSettings {
+            directory: default_windows_install_dir()?,
+            desktop_shortcut: true,
+        }))
+}
+
+#[cfg(target_os = "windows")]
+pub fn install_dir() -> Result<PathBuf, String> {
+    Ok(current_windows_install_settings()?.directory)
 }
 
 #[cfg(target_os = "macos")]
@@ -138,6 +213,7 @@ fn normalize_path(p: &Path) -> String {
     p.to_string_lossy()
         .replace('/', "\\")
         .trim_start_matches(r"\\?\")
+        .trim_end_matches('\\')
         .to_ascii_lowercase()
 }
 
@@ -308,19 +384,23 @@ pub fn create_macos_app_bundle(src_binary: &Path, bundle_path: &Path) -> Result<
 
 #[cfg(target_os = "windows")]
 pub fn run_installer_ui(silent: bool) -> Result<PathBuf, String> {
-    let target_dir = install_dir()?;
+    if !silent {
+        return run_windows_install_wizard();
+    }
+    let settings = current_windows_install_settings()?;
+    let target_dir = settings.directory.clone();
+    validate_windows_install_dir(&target_dir)?;
     let target_exe = target_dir.join("Niki.exe");
     let target_ico = target_dir.join("icon.ico");
     let current_exe = env::current_exe().map_err(|e| e.to_string())?;
-
-    if !silent {
-        let prompt = format!(
-            "Niki v{VERSION} 프로그램을 이 PC에 설치하시겠습니까?\n\n• 설치 위치: {}\n• 바탕화면 및 시작 메뉴 바로가기 생성\n• Windows [설치된 앱] 등록",
-            target_dir.display()
-        );
-        if !confirm_dialog("Niki 설치 마법사", &prompt) {
-            return Err("설치가 취소되었습니다.".into());
-        }
+    let previous_dir = read_windows_install_settings()
+        .map(|old| old.directory)
+        .unwrap_or(default_windows_install_dir()?);
+    if target_exe.is_file()
+        && normalize_path(&target_dir) != normalize_path(&previous_dir)
+        && normalize_path(&current_exe) != normalize_path(&target_exe)
+    {
+        return Err("선택한 폴더에 다른 Niki.exe가 있습니다. 다른 설치 위치를 선택해 주세요.".into());
     }
 
     stop_other_instances();
@@ -346,19 +426,66 @@ pub fn run_installer_ui(silent: bool) -> Result<PathBuf, String> {
         }
     }
 
-    let _ = fs::write(&target_ico, APP_ICON_ICO);
+    fs::write(&target_ico, APP_ICON_ICO).map_err(|e| format!("아이콘 파일 저장 실패: {e}"))?;
 
     let exe_size_kb = fs::metadata(&target_exe)
         .map(|m| (m.len() / 1024) as u32)
         .unwrap_or(12000);
 
-    register_windows_shortcuts_and_uninstall(&target_dir, &target_exe, &target_ico, exe_size_kb)?;
+    register_windows_shortcuts_and_uninstall(
+        &target_dir,
+        &target_exe,
+        &target_ico,
+        exe_size_kb,
+        settings.desktop_shortcut,
+    )?;
+    save_windows_install_settings(&settings)?;
 
-    Command::new(&target_exe)
-        .spawn()
-        .map_err(|e| format!("설치된 Niki 실행 실패: {e}"))?;
+    if normalize_path(&previous_dir) != normalize_path(&target_dir) {
+        // Only remove known program files from the former installation. Keep
+        // unrelated files if the user chose a shared folder.
+        let _ = fs::remove_file(previous_dir.join("Niki.exe"));
+        let _ = fs::remove_file(previous_dir.join("icon.ico"));
+        let _ = fs::remove_dir(&previous_dir);
+    }
+
+    if env::var("NIKI_SKIP_LAUNCH").as_deref() != Ok("1") {
+        Command::new(&target_exe)
+            .spawn()
+            .map_err(|e| format!("설치된 Niki 실행 실패: {e}"))?;
+    }
 
     Ok(target_exe)
+}
+
+#[cfg(target_os = "windows")]
+fn run_windows_install_wizard() -> Result<PathBuf, String> {
+    let current_exe = env::current_exe().map_err(|e| e.to_string())?;
+    let settings = current_windows_install_settings()?;
+    let status = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-Sta",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            include_str!("windows_wizard.ps1"),
+        ])
+        .env("NIKI_SETUP_EXE", current_exe)
+        .env("NIKI_DEFAULT_DIR", &settings.directory)
+        .env(
+            "NIKI_DESKTOP_DEFAULT",
+            if settings.desktop_shortcut { "1" } else { "0" },
+        )
+        .env("NIKI_VERSION", VERSION)
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map_err(|e| format!("설치 마법사 실행 실패: {e}"))?;
+    match status.code() {
+        Some(0) => Ok(installed_exe_path()?),
+        Some(2) => Err("설치가 취소되었습니다.".into()),
+        _ => Err("설치 마법사가 완료되지 않았습니다.".into()),
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -410,6 +537,7 @@ pub fn run_uninstaller_ui() -> Result<(), String> {
     stop_other_instances();
 
     let target_dir = install_dir()?;
+    let settings_path = windows_install_settings_path()?;
     let script = r#"
 $ErrorActionPreference = 'SilentlyContinue'
 $desktop = [Environment]::GetFolderPath('Desktop')
@@ -418,16 +546,24 @@ Remove-Item -LiteralPath (Join-Path $desktop 'Niki.lnk') -Force
 Remove-Item -LiteralPath (Join-Path $startMenu 'Niki.lnk') -Force
 Remove-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\app.niki.journal' -Recurse -Force
 "#;
-    let _ = run_powershell(script, &[]);
+    run_powershell(script, &[])?;
 
     info_dialog("Niki 제거 완료", "Niki 프로그램이 PC에서 제거되었습니다.");
 
-    let dir_str = target_dir.to_string_lossy().to_string();
-    let _ = Command::new("cmd.exe")
-        .args([
-            "/C",
-            &format!("timeout /t 2 /nobreak >nul & rmdir /s /q \"{dir_str}\""),
-        ])
+    let cleanup = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+Wait-Process -Id ([int]$env:NIKI_SELF_PID) -Timeout 30 -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $env:NIKI_DIR 'Niki.exe') -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $env:NIKI_DIR 'icon.ico') -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $env:NIKI_DIR -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $env:NIKI_SETTINGS -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Split-Path -Parent $env:NIKI_SETTINGS) -ErrorAction SilentlyContinue
+"#;
+    let _ = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", cleanup])
+        .env("NIKI_SELF_PID", std::process::id().to_string())
+        .env("NIKI_DIR", target_dir)
+        .env("NIKI_SETTINGS", settings_path)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn();
 
@@ -486,6 +622,7 @@ fn register_windows_shortcuts_and_uninstall(
     target_exe: &Path,
     target_ico: &Path,
     size_kb: u32,
+    desktop_shortcut: bool,
 ) -> Result<(), String> {
     let dir_s = target_dir.to_string_lossy().to_string();
     let exe_s = target_exe.to_string_lossy().to_string();
@@ -499,7 +636,12 @@ $wsh = New-Object -ComObject WScript.Shell
 $desktop = [Environment]::GetFolderPath('Desktop')
 $startMenu = [Environment]::GetFolderPath('Programs')
 
-foreach ($folder in @($desktop, $startMenu)) {
+if ($desktop -and $env:NIKI_DESKTOP_SHORTCUT -ne '1') {
+  Remove-Item -LiteralPath (Join-Path $desktop 'Niki.lnk') -Force -ErrorAction SilentlyContinue
+}
+$folders = @($startMenu)
+if ($env:NIKI_DESKTOP_SHORTCUT -eq '1') { $folders += $desktop }
+foreach ($folder in $folders) {
   if ($folder -and (Test-Path -LiteralPath $folder)) {
     $lnk = $wsh.CreateShortcut((Join-Path $folder 'Niki.lnk'))
     $lnk.TargetPath = $env:NIKI_EXE
@@ -535,6 +677,7 @@ Set-ItemProperty -Path $regPath -Name 'EstimatedSize' -Value ([int]$env:NIKI_SIZ
             ("NIKI_VER", VERSION),
             ("NIKI_UNINSTALL", &uninstall_cmd),
             ("NIKI_SIZE_KB", &size_s),
+            ("NIKI_DESKTOP_SHORTCUT", if desktop_shortcut { "1" } else { "0" }),
         ],
     )
 }
@@ -636,5 +779,32 @@ fn run_powershell(script: &str, env_vars: &[(&str, &str)]) -> Result<(), String>
         Ok(())
     } else {
         Err("설치 스크립트 실행이 중단되었습니다.".into())
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::{WindowsInstallSettings, normalize_path, validate_windows_install_dir};
+    use std::path::Path;
+
+    #[test]
+    fn installation_requires_a_local_child_directory() {
+        assert!(validate_windows_install_dir(Path::new(r"C:\Apps\Niki")).is_ok());
+        for invalid in [r"C:\", r"Niki", r"\\server\share\Niki", r"C:\Apps\..\Niki"] {
+            assert!(validate_windows_install_dir(Path::new(invalid)).is_err());
+        }
+        assert_eq!(normalize_path(Path::new(r"C:\Apps\Niki\")), normalize_path(Path::new(r"c:\apps\niki")));
+    }
+
+    #[test]
+    fn installation_choices_round_trip_for_updates() {
+        let settings = WindowsInstallSettings {
+            directory: r"D:\Journal Apps\Niki".into(),
+            desktop_shortcut: false,
+        };
+        let encoded = serde_json::to_vec(&settings).unwrap();
+        let decoded: WindowsInstallSettings = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded.directory, settings.directory);
+        assert!(!decoded.desktop_shortcut);
     }
 }

@@ -53,6 +53,12 @@ jobs:
           npm test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify Windows installer wizard
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -Sta -ExecutionPolicy Bypass -File tests/windows-installer-ui.test.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
 

@@ -13,7 +13,7 @@ niki/
 ├── src/                   # Rust 백엔드 소스 코드
 │   ├── archive/           # ZIP 아카이브 리더 (zip_read.rs)
 │   ├── drive/             # Google OAuth 인증 및 Drive API 전송 (auth.rs, transport.rs)
-│   ├── installer/         # Windows/macOS 설치·제거 및 바로가기/Applications 등록 (mod.rs)
+│   ├── installer/         # Windows 단계별 설치 마법사, 설치·제거 및 macOS Applications 등록
 │   ├── sync/              # AES-256-GCM 암호화, 미디어 청크, 3-way 병합 엔진 (crypto.rs, engine.rs, media.rs, merge.rs)
 │   ├── updater/           # Ed25519/SHA-256 검증 기반 자동 업데이터 (mod.rs)
 │   ├── lib.rs             # Tauri 명령 핸들러 및 로컬 저장소 관리
@@ -45,7 +45,7 @@ cargo run --offline
 cargo build --release --offline
 ```
 
-실행 파일은 `target/release/niki_journal.exe` (`Niki_Setup.exe`)입니다.
+실행 파일은 `target/release/niki_journal.exe` (`Niki_Setup.exe`)입니다. Windows 설치 마법사에서 설치 폴더와 바탕화면 바로가기 생성 여부를 선택하고 확인한 뒤 설치할 수 있습니다. 시작 메뉴 바로가기는 항상 생성됩니다. 선택 사항은 이후 자동 업데이트에도 유지되며, 제거할 때 일기 데이터는 보존됩니다.
 
 ### macOS (MacBook — Apple Silicon & Intel)
 
