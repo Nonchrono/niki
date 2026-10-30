@@ -46,6 +46,7 @@ const fs=require('node:fs');
  assert.equal(await page.locator('.ProseMirror img[data-niki-media]').count(),1);
  await page.waitForFunction(()=>document.querySelector('.ProseMirror img[data-niki-media]')?.naturalWidth>0);
  await page.locator('[data-action="all"]').click();await page.locator('[data-action="entry"]').first().click();
+ await page.waitForSelector('.ProseMirror img[data-niki-media]');
  assert.equal(await page.locator('.ProseMirror img[data-niki-media]').count(),1,'inline image survives reopening');
  await page.waitForFunction(()=>document.querySelector('.ProseMirror img[data-niki-media]')?.naturalWidth>0);
  await page.locator('.ProseMirror p').last().click();await page.keyboard.type(' 추가');await page.waitForTimeout(800);
