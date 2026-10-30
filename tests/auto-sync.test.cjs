@@ -5,7 +5,7 @@ const {pathToFileURL}=require('node:url');const path=require('node:path');
  const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH||'C:/Program Files/Google/Chrome/Application/chrome.exe',args:['--allow-file-access-from-files']});
  const page=await browser.newPage();
  await page.addInitScript(()=>{
-  window.sample={locked:false,updater_config:{},journals:[{id:'j',name:'일기',color:'#576b61'}],entries:[{id:'e',journal_id:'j',title:'기록',body:'기존',date:'2026-10-29',updated_at:'v1',tags:[],favorite:false,attachments:[],location:'',weather:''}],templates:[],sync_conflicts:[],pending_resolution_count:0,synced_entry_ids:[],sync_status:{connected:false}};
+  window.sample={locked:false,updater_config:{},journals:[{id:'j',name:'일기',color:'#576b61'}],entries:[{id:'e',journal_id:'j',title:'기록',body:'기존',date:'2026-10-29',updated_at:'v1',tags:[],favorite:false,attachments:[],location:'',weather:''}],templates:[],sync_conflicts:[],pending_resolution_count:0,synced_entry_ids:[],sync_status:{connected:true,sync_paused:false,pending_upload_count:0}};
   window.calls=[];window.hold=false;
   window.__TAURI__={core:{invoke:async(name,args)=>{
    calls.push(name);if(name==='bootstrap')return structuredClone(sample);
@@ -15,12 +15,13 @@ const {pathToFileURL}=require('node:url');const path=require('node:path');
   }}};
  });
  await page.goto(pathToFileURL(path.resolve('ui/index.html')).href);await page.locator('[data-action="entry"]').click();
- await page.evaluate(async()=>{sample.sync_status={connected:true};await reload();});
+ await page.waitForFunction(()=>calls.includes('drive_sync_now'));
+ const syncCount=await page.evaluate(()=>calls.filter(name=>name==='drive_sync_now').length);
  await page.locator('.ProseMirror').click();await page.keyboard.type(' 변경');await page.waitForTimeout(800);
- assert(await page.evaluate(()=>calls.includes('save_entry_checked')));assert(await page.evaluate(()=>syncTimer!==null),'save must schedule automatic synchronization');
- await page.evaluate(()=>scheduleAutoSync(10));await page.waitForFunction(()=>calls.includes('drive_sync_now'));
+ assert(await page.evaluate(()=>calls.includes('save_entry_checked')));
+ await page.waitForFunction(count=>calls.filter(name=>name==='drive_sync_now').length>count,syncCount,{timeout:12000});
  assert((await page.locator('.ProseMirror').innerText()).includes('변경'));
- await page.evaluate(()=>{window.hold=true;autoSyncDrive();});await page.waitForFunction(()=>typeof releaseSync==='function');
+ await page.evaluate(()=>window.hold=true);await page.locator('.topbar [data-action="drive-sync"]').click();await page.waitForFunction(()=>typeof releaseSync==='function');
  await page.evaluate(()=>{sample.entries[0].body='원격';sample.entries[0].updated_at='remote';});await page.keyboard.type(' 미저장');
  await page.evaluate(()=>releaseSync());await page.waitForTimeout(1000);
  assert((await page.locator('.ProseMirror').innerText()).includes('미저장'));assert.equal(await page.evaluate(()=>sample.entries[0].body),'원격');assert((await page.locator('#save-status').innerText()).includes('기록이 변경'));assert.equal(await page.locator('[data-action="save-draft-copy"]').count(),1);

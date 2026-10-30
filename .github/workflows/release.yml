@@ -37,14 +37,14 @@ jobs:
           node-version: '22'
           cache: npm
 
-      - name: Verify editor build and behavior
+      - name: Verify React UI build and behavior
         shell: pwsh
         run: |
           npm ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git diff --exit-code -- ui/rich-editor.js
+          git diff --exit-code -- ui/app.js ui/THIRD_PARTY_LICENSES.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
