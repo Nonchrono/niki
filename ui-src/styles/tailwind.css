@@ -77,4 +77,146 @@
   .settings-card > .panel-actions { margin-top: 4px; }
   .settings-card > .account-box, .settings-card > .template-row { margin: 0; }
   .settings-card > [data-slot="button"] { align-self: flex-start; }
+
+  /* Calendar & DatePicker holiday and weekend styling */
+  .weekday.sunday, .date-weekday.sunday {
+    color: #dc2626;
+    font-weight: 700;
+  }
+  .weekday.saturday, .date-weekday.saturday {
+    color: #2563eb;
+    font-weight: 700;
+  }
+
+  .day-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    margin-bottom: 8px;
+    min-height: 18px;
+  }
+  .day-number {
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+  }
+  .day-holiday {
+    font-size: 10px;
+    font-weight: 700;
+    color: #dc2626;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 4px;
+    padding: 1px 4px;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 68px;
+  }
+
+  /* 토요일 날짜 칸 및 일자 표시 숫자: 파란색 */
+  .day.saturday {
+    background: #f8faff;
+    border-color: #dbe7fc;
+  }
+  .day.saturday:hover {
+    border-color: #93c5fd;
+  }
+  .day.saturday .day-number,
+  .day.saturday > span {
+    color: #2563eb;
+    font-weight: 700;
+  }
+
+  /* 일요일 날짜 칸 및 일자 표시 숫자: 빨간색 */
+  .day.sunday {
+    background: #fff8f8;
+    border-color: #fce7e7;
+  }
+  .day.sunday:hover {
+    border-color: #fca5a5;
+  }
+  .day.sunday .day-number,
+  .day.sunday > span {
+    color: #dc2626;
+    font-weight: 700;
+  }
+
+  /* 공휴일 날짜 칸 및 일자 표시 숫자: 빨간색 (토요일과 공휴일이 겹치면 빨간색) */
+  .day.holiday,
+  .day.holiday.saturday,
+  .day.holiday.sunday {
+    background: #fff8f8 !important;
+    border-color: #fce7e7 !important;
+  }
+  .day.holiday:hover,
+  .day.holiday.saturday:hover,
+  .day.holiday.sunday:hover {
+    border-color: #fca5a5 !important;
+  }
+  .day.holiday .day-number,
+  .day.holiday > span,
+  .day.holiday.saturday .day-number,
+  .day.holiday.saturday > span,
+  .day.holiday.sunday .day-number,
+  .day.holiday.sunday > span {
+    color: #dc2626 !important;
+    font-weight: 700;
+  }
+
+  /* 오늘 날짜 테두리 */
+  .day.today {
+    border-color: #315e42;
+    box-shadow: 0 0 0 1px #315e42;
+  }
+  .day.today.saturday:not(.holiday) {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 1px #2563eb;
+  }
+  .day.today.sunday,
+  .day.today.holiday {
+    border-color: #dc2626;
+    box-shadow: 0 0 0 1px #dc2626;
+  }
+
+  .day.outside {
+    opacity: 0.38;
+  }
+
+  /* DatePicker 날짜 칸 및 일자 표시 숫자 */
+  .date-day.saturday {
+    color: #2563eb;
+    font-weight: 600;
+  }
+  .date-day.saturday:hover {
+    background: #eff6ff;
+  }
+  .date-day.sunday {
+    color: #dc2626;
+    font-weight: 600;
+  }
+  .date-day.sunday:hover {
+    background: #fef2f2;
+  }
+  .date-day.holiday,
+  .date-day.holiday.saturday,
+  .date-day.holiday.sunday {
+    color: #dc2626 !important;
+    font-weight: 700;
+  }
+  .date-day.holiday:hover,
+  .date-day.holiday.saturday:hover,
+  .date-day.holiday.sunday:hover {
+    background: #fef2f2 !important;
+  }
+  .date-day.outside {
+    opacity: 0.35;
+  }
+  .date-day.selected,
+  .date-day.selected:hover {
+    background: #315e42 !important;
+    color: #ffffff !important;
+  }
 }

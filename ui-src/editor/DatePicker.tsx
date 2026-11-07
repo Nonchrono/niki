@@ -3,12 +3,14 @@ import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-rea
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { dateLabel, localDate } from '../lib/format';
+import { getDayColorType, getHoliday, useHolidays } from '../lib/holidays';
 
 export function DatePicker({ value, onChange }: { value: string; onChange: (date: string) => void }) {
   const [open, setOpen] = useState(false);
   const [month, setMonth] = useState(() => new Date(`${value}T12:00:00`));
   const year = month.getFullYear(), monthIndex = month.getMonth();
   const offset = new Date(year, monthIndex, 1).getDay();
+  const holidays = useHolidays(year);
   const choose = (date: string) => { onChange(date); setOpen(false); };
   return <span className="date-control">
     <Button variant="outline" size="sm" className="date-trigger" data-action="date-picker" aria-label="기록 날짜 선택"
@@ -24,12 +26,16 @@ export function DatePicker({ value, onChange }: { value: string; onChange: (date
           onClick={() => setMonth(new Date(year, monthIndex + 1, 1))}><ChevronRight /></Button>
       </div>
       <div className="date-grid">
-        {['일', '월', '화', '수', '목', '금', '토'].map(day => <span key={day} className="date-weekday">{day}</span>)}
+        {['일', '월', '화', '수', '목', '금', '토'].map((day, idx) => (
+          <span key={day} className={`date-weekday ${idx === 0 ? 'sunday' : idx === 6 ? 'saturday' : ''}`}>{day}</span>
+        ))}
         {Array.from({ length: 42 }, (_, i) => {
           const date = new Date(year, monthIndex, i - offset + 1);
           const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-          return <button key={i} className={`date-day ${date.getMonth() !== monthIndex ? 'outside ' : ''}${key === value ? 'selected ' : ''}${key === localDate() ? 'today' : ''}`}
-            data-action="date-select" aria-label={dateLabel(key)} aria-current={key === value ? 'date' : undefined}
+          const holiday = holidays[key] || getHoliday(key);
+          const colorType = getDayColorType(date, holiday);
+          return <button key={i} className={`date-day ${colorType} ${date.getMonth() !== monthIndex ? 'outside ' : ''}${key === value ? 'selected ' : ''}${key === localDate() ? 'today' : ''}`}
+            data-action="date-select" aria-label={holiday ? `${dateLabel(key)} (${holiday.localName})` : dateLabel(key)} title={holiday?.localName} aria-current={key === value ? 'date' : undefined}
             onClick={() => choose(key)}>{date.getDate()}</button>;
         })}
       </div>
