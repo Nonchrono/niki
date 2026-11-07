@@ -4,6 +4,7 @@ import { useApp } from '../app/AppContext';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { NativeSelect, NativeSelectOption } from '../components/ui/native-select';
+import { askConfirm } from '../lib/dialog';
 import { errorMessage, fileBase64 } from '../lib/format';
 import type { Entry, EntryInput } from '../types';
 import { AttachmentPreview } from './AttachmentPreview';
@@ -16,17 +17,17 @@ type Fields = Pick<EntryInput, 'title' | 'date' | 'journalId' | 'favorite' | 'ta
 const fieldsFrom = (entry: Entry): Fields => ({ title: entry.title, date: entry.date, journalId: entry.journal_id, favorite: entry.favorite, tags: entry.tags, location: entry.location, weather: entry.weather });
 const draftKey = (id: string) => `niki.editor.draft.${id}`;
 function initialDraft(entry: Entry): { fields: Fields; body: string; expected: Entry; restored: boolean } {
+  return { fields: fieldsFrom(entry), body: entry.body, expected: structuredClone(entry), restored: false };
+}
+function readDraft(entry: Entry): EntryInput | null {
   try {
     const raw = localStorage.getItem(draftKey(entry.id));
     if (raw) {
       const draft = JSON.parse(raw) as EntryInput;
-      if (draft.id === entry.id && typeof draft.body === 'string' && draft.expectedEntry) {
-        if (confirm('이 기록에 저장되지 않은 편집 내용이 있습니다. 복원할까요? 취소하면 임시 편집 내용이 삭제됩니다.')) return { fields: { title: draft.title, date: draft.date, journalId: draft.journalId, favorite: draft.favorite, tags: draft.tags, location: draft.location, weather: draft.weather }, body: draft.body, expected: draft.expectedEntry, restored: true };
-        localStorage.removeItem(draftKey(entry.id));
-      }
+      if (draft.id === entry.id && typeof draft.body === 'string' && draft.expectedEntry) return draft;
     }
   } catch (error) { console.warn('Draft could not be read:', error); }
-  return { fields: fieldsFrom(entry), body: entry.body, expected: structuredClone(entry), restored: false };
+  return null;
 }
 
 export function EntryEditor({ entry }: { entry: Entry }) {
@@ -99,7 +100,22 @@ export function EntryEditor({ entry }: { entry: Entry }) {
   // Register once; callbacks read refs and are refreshed on every render below.
   const leaveRef = useRef(leave); leaveRef.current = leave;
   useEffect(() => { registerLeave(() => leaveRef.current()); return () => registerLeave(null); }, [registerLeave]);
-  useEffect(() => { if (seed.restored) saveTimer.current = setTimeout(() => { void saveCurrent(); }, 550); }, []);
+  useEffect(() => {
+    const draft = readDraft(entry);
+    if (!draft) return;
+    let cancelled = false;
+    void askConfirm('이 기록에 저장되지 않은 편집 내용이 있습니다. 복원할까요? 삭제를 선택하면 임시 편집 내용이 사라집니다.', { okLabel: '복원', cancelLabel: '삭제' }).then(restore => {
+      if (cancelled) return;
+      if (!restore) { clearDraft(); return; }
+      const restored: Fields = { title: draft.title, date: draft.date, journalId: draft.journalId, favorite: draft.favorite, tags: draft.tags, location: draft.location, weather: draft.weather };
+      fieldsRef.current = restored; setFields(restored); setTagInput(restored.tags.join(', '));
+      expected.current = draft.expectedEntry!;
+      setSeed({ fields: restored, body: draft.body, expected: draft.expectedEntry!, restored: true });
+      dirty.current = true; setStatus('저장 대기 중…');
+      saveTimer.current = setTimeout(() => { void saveCurrent(); }, 550);
+    });
+    return () => { cancelled = true; };
+  }, []);
   useEffect(() => () => { if (saveTimer.current) clearTimeout(saveTimer.current); }, []);
   useEffect(() => {
     if (entry.updated_at === expected.current.updated_at || dirty.current || savePromise.current || document.querySelector('.editor-inner')?.contains(document.activeElement)) return;
@@ -160,7 +176,7 @@ export function EntryEditor({ entry }: { entry: Entry }) {
         <Button variant="ghost" size="icon-sm" data-action="entry-menu" title="기록 메뉴" aria-label="기록 메뉴" aria-haspopup="menu" onClick={() => setMenu(!menu)}><Ellipsis /></Button>
         {menu && <div className="context-menu" role="menu"><button className="context-menu-item danger" role="menuitem" data-action="trash-entry" onClick={() => void action(async () => {
           setMenu(false);
-          if (!confirm('이 기록을 휴지통으로 이동할까요?')) return;
+          if (!await askConfirm('이 기록을 휴지통으로 이동할까요?', { okLabel: '휴지통으로 이동', danger: true })) return;
           if (!await leave()) throw Error('편집 내용을 저장하지 못했습니다');
           await run('trash_entry', { id: entry.id }); await refresh(); await go('/all');
         })}><Trash2 size={15} />휴지통으로 이동</button></div>}
@@ -197,7 +213,7 @@ export function EntryEditor({ entry }: { entry: Entry }) {
     </div>
     <TiptapEditor key={seed.expected.updated_at + seed.body} ref={editor} initialBody={seed.body} onChange={changed} resolveImage={media} />
     <div className="attach-grid">{attachments.map(attachment => <AttachmentPreview key={attachment.id} attachment={attachment} onRemove={() => void action(async () => {
-      if (!confirm('첨부 파일을 삭제할까요?')) return;
+      if (!await askConfirm('첨부 파일을 삭제할까요?', { okLabel: '삭제', danger: true })) return;
       if (!await leave()) throw Error('편집 내용을 저장하지 못했습니다');
       await run('remove_attachment', { entryId: entry.id, attachmentId: attachment.id });
       clearMedia(attachment.id);

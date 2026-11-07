@@ -8,6 +8,7 @@ import { Button } from '../components/ui/button';
 import { useApp } from './AppContext';
 import { accountLabel, localDate } from '../lib/format';
 import type { Journal } from '../types';
+import { askConfirm, askText } from '../lib/dialog';
 
 const sections: { path: string; action: string; Icon: LucideIcon; label: string }[] = [
   { path: '/all', action: 'all', Icon: BookOpenText, label: '전체 기록' },
@@ -83,7 +84,7 @@ export function AppShell() {
       </button>)}
       <button className="side-row side-add" data-action="new-journal" onClick={() => void action(async () => {
         await saveBeforeLeaving();
-        const name = prompt('새 일기장 이름');
+        const name = await askText('새 일기장 이름');
         if (!name?.trim()) return;
         const id = await run<string>('save_journal', { id: null, name, color: '#576b61' });
         await refresh();
@@ -122,16 +123,16 @@ export function AppShell() {
       <div className="context-menu journal-menu" style={{ left: journalMenu.x, top: journalMenu.y }} onClick={event => event.stopPropagation()}>
         <div className="context-menu-head"><span className="dot" style={{ background: journalMenu.journal.color }} />{journalMenu.journal.name}</div>
         <button className="context-menu-item" data-action="edit-journal" onClick={() => void action(async () => {
-          const name = prompt('일기장 이름', journalMenu.journal.name);
+          const name = await askText('일기장 이름', journalMenu.journal.name);
           if (!name?.trim()) return;
-          const color = prompt('색상 코드 (#RRGGBB)', journalMenu.journal.color);
+          const color = await askText('색상 코드 (#RRGGBB)', journalMenu.journal.color);
           if (!color) return;
           await run('save_journal', { id: journalMenu.journal.id, name, color });
           await refresh();
           setJournalMenu(null);
         })}><Pencil size={15} />수정</button>
         <button className="context-menu-item danger" data-action="delete-journal" onClick={() => void action(async () => {
-          if (!confirm('빈 일기장을 삭제할까요?')) return;
+          if (!await askConfirm('빈 일기장을 삭제할까요?', { okLabel: '삭제', danger: true })) return;
           await run('delete_journal', { id: journalMenu.journal.id });
           await refresh();
           await go('/all');

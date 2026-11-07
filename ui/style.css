@@ -2292,6 +2292,43 @@
       grid-template-columns: 1fr;
     }
   }
+  .dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: grid;
+    place-items: center;
+    background: #1c261f66;
+  }
+  .dialog-card {
+    width: min(420px,calc(100vw - 32px));
+    background: #fff;
+    border-radius: 14px;
+    padding: 20px;
+    box-shadow: 0 18px 50px #1c261f40;
+  }
+  .dialog-message {
+    margin: 0 0 14px;
+    font-size: 13px;
+    line-height: 1.7;
+    color: #334238;
+    white-space: pre-wrap;
+  }
+  .dialog-input {
+    width: 100%;
+    border: 1px solid #dfe6dd;
+    border-radius: 8px;
+    padding: 9px 10px;
+    font-size: 13px;
+    margin-bottom: 14px;
+    background: #fcfdfb;
+    resize: vertical;
+  }
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
 }
 :root {
   --radius: 0.625rem;

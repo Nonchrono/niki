@@ -10,6 +10,7 @@ import { MediaPage } from '../pages/MediaPage';
 import { MemoriesPage } from '../pages/MemoriesPage';
 import { TrashPage } from '../pages/TrashPage';
 import { SettingsPage } from '../pages/SettingsPage';
+import { DialogHost } from '../lib/dialog';
 
 function AppRoutes() {
   const { data, run, refresh, action, scheduleSync } = useApp();
@@ -34,4 +35,4 @@ function AppRoutes() {
     </Route>
   </Routes>;
 }
-export function App() { return <HashRouter><AppProvider><AppRoutes /></AppProvider></HashRouter>; }
+export function App() { return <HashRouter><AppProvider><AppRoutes /><DialogHost /></AppProvider></HashRouter>; }
