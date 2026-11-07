@@ -132,7 +132,7 @@ export function AppShell() {
           setJournalMenu(null);
         })}><Pencil size={15} />수정</button>
         <button className="context-menu-item danger" data-action="delete-journal" onClick={() => void action(async () => {
-          if (!await askConfirm('빈 일기장을 삭제할까요?', { okLabel: '삭제', danger: true })) return;
+          if (!await askConfirm('일기장을 삭제할까요? 휴지통에 있는 기록은 다른 일기장의 휴지통으로 옮겨집니다.', { okLabel: '삭제', danger: true })) return;
           await run('delete_journal', { id: journalMenu.journal.id });
           await refresh();
           await go('/all');

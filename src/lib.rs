@@ -1165,13 +1165,29 @@ fn save_journal(
 #[tauri::command]
 fn delete_journal(state: State<'_, AppState>, id: String) -> Result<(), String> {
     mutate(&state, |store| {
-        if store.entries.iter().any(|e| e.journal_id == id) {
+        if store
+            .entries
+            .iter()
+            .any(|e| e.journal_id == id && e.deleted_at.is_none())
+        {
             return Err(
                 "글이 있는 일지는 삭제할 수 없습니다. 먼저 글을 이동하거나 삭제하세요".into(),
             );
         }
         if store.journals.len() <= 1 {
             return Err("마지막 일지는 삭제할 수 없습니다".into());
+        }
+        // Trashed entries stay restorable: move them to another journal's trash.
+        let fallback = store
+            .journals
+            .iter()
+            .find(|j| j.id != id)
+            .map(|j| j.id.clone())
+            .ok_or("마지막 일지는 삭제할 수 없습니다")?;
+        let ts = now();
+        for entry in store.entries.iter_mut().filter(|e| e.journal_id == id) {
+            entry.journal_id = fallback.clone();
+            entry.updated_at = ts.clone();
         }
         store.journals.retain(|j| j.id != id);
         Ok(())
