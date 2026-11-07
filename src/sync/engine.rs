@@ -322,6 +322,42 @@ fn restore_entry_media(
     Ok(())
 }
 
+/// Conservative merge used only when no common ancestor is known (for example
+/// after the sync base was cleared by a reconnect or key change). Two versions
+/// merge automatically only when every field is equal or empty on one side, so
+/// no written text is ever overwritten. Anything else stays a conflict.
+fn merge_without_base(local: &Entry, remote: &Entry) -> Option<Entry> {
+    fn pick<T: Clone + PartialEq>(a: &T, b: &T, is_empty: impl Fn(&T) -> bool) -> Option<T> {
+        if a == b || is_empty(b) {
+            Some(a.clone())
+        } else if is_empty(a) {
+            Some(b.clone())
+        } else {
+            None
+        }
+    }
+    if local.id != remote.id
+        || local.journal_id != remote.journal_id
+        || local.date != remote.date
+        || local.deleted_at.is_some()
+        || remote.deleted_at.is_some()
+    {
+        return None;
+    }
+    let mut merged = local.clone();
+    merged.title = pick(&local.title, &remote.title, |v| v.is_empty())?;
+    merged.body = pick(&local.body, &remote.body, |v| v.trim().is_empty())?;
+    merged.location = pick(&local.location, &remote.location, |v| v.is_empty())?;
+    merged.weather = pick(&local.weather, &remote.weather, |v| v.is_empty())?;
+    merged.tags = pick(&local.tags, &remote.tags, |v| v.is_empty())?;
+    merged.attachments = pick(&local.attachments, &remote.attachments, |v| v.is_empty())?;
+    merged.external_id = pick(&local.external_id, &remote.external_id, |v| v.is_none())?;
+    merged.favorite = local.favorite || remote.favorite;
+    merged.created_at = local.created_at.clone().min(remote.created_at.clone());
+    merged.updated_at = local.updated_at.clone().max(remote.updated_at.clone());
+    Some(merged)
+}
+
 fn conflict_remote_entry(entry: &Entry) -> Option<Entry> {
     if entry.deleted_at.is_some() {
         None
@@ -708,7 +744,15 @@ fn sync_impl(
                 None
             };
 
-            match sync_merge::merge(base.as_ref(), local.as_ref(), Some(&remote_entry)) {
+            let mut decision = sync_merge::merge(base.as_ref(), local.as_ref(), Some(&remote_entry));
+            if base.is_none() {
+                if let (Decision::Conflict { .. }, Some(l)) = (&decision, local.as_ref()) {
+                    if let Some(merged) = merge_without_base(l, &remote_entry) {
+                        decision = Decision::Merged(Some(merged));
+                    }
+                }
+            }
+            match decision {
                 Decision::Merged(Some(merged)) => {
                     if let Some(i) = local_idx {
                         store.entries[i] = merged.clone();
@@ -1779,5 +1823,34 @@ mod tests {
         let restored: SyncRevision = serde_json::from_value(old_revision).unwrap();
         assert!(restored.deleted_journal_ids.is_empty());
         assert!(restored.deleted_template_ids.is_empty());
+    }
+
+    #[test]
+    fn merge_without_base_fills_empty_fields_but_keeps_real_conflicts() {
+        let local = Entry {
+            body: "text".into(),
+            updated_at: "2026-10-29T07:17:12+00:00".into(),
+            ..Entry::default()
+        };
+        let remote = Entry {
+            location: "place".into(),
+            updated_at: "2026-10-30T08:54:57+00:00".into(),
+            ..local.clone()
+        };
+        let merged = merge_without_base(&local, &remote).unwrap();
+        assert_eq!(merged.body, "text");
+        assert_eq!(merged.location, "place");
+        assert_eq!(merged.updated_at, remote.updated_at);
+
+        let diverged = Entry {
+            body: "other text".into(),
+            ..remote.clone()
+        };
+        assert!(merge_without_base(&local, &diverged).is_none());
+        let deleted = Entry {
+            deleted_at: Some("2026-11-01T00:00:00+00:00".into()),
+            ..remote
+        };
+        assert!(merge_without_base(&local, &deleted).is_none());
     }
 }

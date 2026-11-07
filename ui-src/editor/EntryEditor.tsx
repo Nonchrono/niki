@@ -7,6 +7,7 @@ import { NativeSelect, NativeSelectOption } from '../components/ui/native-select
 import { errorMessage, fileBase64 } from '../lib/format';
 import type { Entry, EntryInput } from '../types';
 import { AttachmentPreview } from './AttachmentPreview';
+import { ConflictPanel } from './ConflictPanel';
 import { DatePicker } from './DatePicker';
 import { TiptapEditor, type TiptapEditorHandle } from './TiptapEditor';
 import { needsSourceEditor } from './markdown';
@@ -130,7 +131,8 @@ export function EntryEditor({ entry }: { entry: Entry }) {
   };
   const attachFiles = (event: ChangeEvent<HTMLInputElement>) => { const files = Array.from(event.target.files || []); event.target.value = ''; void action(async () => { if (!await leave()) throw Error('기존 편집 내용을 저장하지 못했습니다'); for (const file of files) await run('add_attachment', { entryId: entry.id, name: file.name, mime: file.type || 'application/octet-stream', data: await fileBase64(file) }); const next = await refresh(); const updated = next.entries.find(item => item.id === entry.id); if (updated) { expected.current = updated; setAttachments(updated.attachments); } toast('첨부 파일 저장됨'); }); };
   const copyDraft = () => void action(async () => { const draft = input(); const newId = await run<string>('save_entry', { input: { ...draft, id: null, expectedEntry: null } }); clearDraft(); dirty.current = false; setConflict(false); await refresh(); await go(`/journals/${draft.journalId}/entries/${newId}`); toast('편집 내용을 별도 기록으로 저장했습니다'); });
-  const syncInfo = data?.sync_conflicts.some(item => item.entry_id === entry.id)
+  const entryConflict = data?.sync_conflicts.find(item => item.entry_id === entry.id);
+  const syncInfo = entryConflict
     ? { Icon: TriangleAlert, label: '동기화 충돌' }
     : !data?.sync_status.connected ? { Icon: HardDrive, label: '로컬 저장' }
     : data.sync_status.sync_paused ? { Icon: Pause, label: '동기화 일시 중지됨' }
@@ -164,6 +166,7 @@ export function EntryEditor({ entry }: { entry: Entry }) {
         })}><Trash2 size={15} />휴지통으로 이동</button></div>}
       </div>
     </div>
+    {entryConflict && <ConflictPanel conflict={entryConflict} />}
     <input className="editor-title" id="entry-title"
       placeholder="제목 없는 기록" value={fields.title} onChange={event => updateField('title', event.target.value)} />
     <div className="editor-meta">
