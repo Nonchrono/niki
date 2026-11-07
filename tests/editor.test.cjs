@@ -51,7 +51,7 @@ const fs=require('node:fs');
  await page.waitForFunction(()=>document.querySelector('.ProseMirror img[data-niki-media]')?.naturalWidth>0);
  await page.locator('.ProseMirror p').last().click();await page.keyboard.type(' 추가');await page.waitForTimeout(800);
  assert((await page.evaluate(()=>sample.entries[0].body)).includes('niki-media:11111111-2222-4333-8444-555555555555'),'later rich text edits preserve the image');
- page.once('dialog',dialog=>dialog.accept());await page.locator('[data-action="remove-attachment"]').click();
+ await page.locator('[data-action="remove-attachment"]').click();await page.locator('[data-action="dialog-ok"]').click();
  await page.waitForFunction(()=>sample.entries[0].attachments.length===0);
  assert(!(await page.evaluate(()=>sample.entries[0].body)).includes('niki-media:'),'removing attachment also removes inline reference');
  await page.evaluate(()=>window.failSave=true);await page.locator('.ProseMirror').click();await page.keyboard.type('unsaved');await page.locator('[data-action="settings"]').click();await page.waitForTimeout(500);assert.equal(await page.locator('.ProseMirror').count(),1,'failed save must not navigate away');assert((await page.locator('.ProseMirror').innerText()).includes('unsaved'));

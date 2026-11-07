@@ -25,7 +25,7 @@ const {pathToFileURL}=require('node:url');const path=require('node:path');
  await page.evaluate(()=>{sample.entries[0].body='원격';sample.entries[0].updated_at='remote';});await page.keyboard.type(' 미저장');
  await page.evaluate(()=>releaseSync());await page.waitForTimeout(1000);
  assert((await page.locator('.ProseMirror').innerText()).includes('미저장'));assert.equal(await page.evaluate(()=>sample.entries[0].body),'원격');assert((await page.locator('#save-status').innerText()).includes('기록이 변경'));assert.equal(await page.locator('[data-action="save-draft-copy"]').count(),1);
- page.once('dialog',dialog=>dialog.accept());await page.reload();await page.locator('[data-action="entry"]').click();await page.waitForTimeout(900);
+ await page.reload();await page.locator('[data-action="dialog-ok"]').click();await page.locator('[data-action="entry"]').click();await page.waitForTimeout(900);
  assert((await page.locator('.ProseMirror').innerText()).includes('미저장'),'unsaved draft survives reload');assert.equal(await page.locator('[data-action="save-draft-copy"]').count(),1);
  await page.locator('[data-action="save-draft-copy"]').click();assert((await page.evaluate(()=>sample.entries.find(e=>e.id==='copy').body)).includes('미저장'));assert.equal(await page.evaluate(()=>sample.entries[0].body),'기존');
  await browser.close();console.log('Automatic sync scheduling and draft protection passed');
