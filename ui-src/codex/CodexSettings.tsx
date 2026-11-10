@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useApp } from '../app/AppContext';
 import { Button } from '../components/ui/button';
 import { errorMessage } from '../lib/format';
+import { GPT_CONNECTION_CHANGED } from './useGptConnection';
 
 export type CodexStatus = { installed: boolean; connected: boolean; plan: string | null; login_pending: boolean };
 type Login = { verification_url: string; user_code: string };
@@ -12,6 +13,7 @@ export function CodexSettings() {
   const [login, setLogin] = useState<Login | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  useEffect(() => { if (status) window.dispatchEvent(new Event(GPT_CONNECTION_CHANGED)); }, [status?.connected, status?.login_pending]);
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
@@ -39,9 +41,7 @@ export function CodexSettings() {
   return <>
     <div className="wide-head"><h2>일기 요약</h2></div>
     <div className="panel-card settings-card codex-settings">
-      <h3>Codex 계정 연결</h3>
-      <p>ChatGPT 계정으로 연결하고 GPT-6 Luna로 선택한 일기를 요약합니다. 사용 가능 여부와 한도는 계정에 따라 달라집니다.</p>
-      <p className="subtle">이 PC에 Codex가 설치되어 있어야 합니다. Niki의 로그인은 기존 Codex 로그인과 별도로 관리합니다.</p>
+      <h3>GPT 계정 연결</h3>
       {status?.connected ? <p role="status">연결됨 · {status.plan || '플랜 확인 불가'}</p> : <p role="status">{status ? status.installed ? '계정 연결이 필요합니다' : 'Codex를 설치한 뒤 다시 확인해 주세요 (CLI 0.167 이상).' : '연결 상태 확인 중…'}</p>}
       {error && <p className="sync-error" role="alert">{error}</p>}
       {login && <div className="codex-login">
@@ -62,8 +62,7 @@ export function CodexSettings() {
     </div>
     <div className="panel-card settings-card">
       <h3>전송되는 정보</h3>
-      <p>일기에서 ‘요약하기’를 누르면 해당 일기의 제목과 본문이 OpenAI로 전송됩니다. 첨부 파일과 다른 일기는 보내지 않습니다.</p>
-      <p>로그인 정보는 OS 자격 증명 저장소에 보관하며 일기 백업이나 Google Drive 동기화에 포함하지 않습니다. 요약은 화면에만 표시하고 원문을 변경하지 않습니다.</p>
+      <p>선택한 일기의 제목과 본문이 OpenAI에 전송됩니다.</p>
     </div>
   </>;
 }

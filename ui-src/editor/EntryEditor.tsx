@@ -13,6 +13,7 @@ import { DatePicker } from './DatePicker';
 import { TiptapEditor, type TiptapEditorHandle } from './TiptapEditor';
 import { needsSourceEditor } from './markdown';
 import { SummaryPanel } from '../codex/SummaryPanel';
+import { useGptConnection } from '../codex/useGptConnection';
 
 type Fields = Pick<EntryInput, 'title' | 'date' | 'journalId' | 'favorite' | 'tags' | 'location' | 'weather'>;
 const fieldsFrom = (entry: Entry): Fields => ({ title: entry.title, date: entry.date, journalId: entry.journal_id, favorite: entry.favorite, tags: entry.tags, location: entry.location, weather: entry.weather });
@@ -43,6 +44,8 @@ export function EntryEditor({ entry }: { entry: Entry }) {
   const [conflict, setConflict] = useState(false);
   const [menu, setMenu] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const gptConnected = useGptConnection();
+  useEffect(() => { if (!gptConnected) setSummaryOpen(false); }, [gptConnected]);
   const [attachments, setAttachments] = useState(entry.attachments);
   const [uploading, setUploading] = useState(false);
   const attachInput = useRef<HTMLInputElement>(null);
@@ -165,11 +168,12 @@ export function EntryEditor({ entry }: { entry: Entry }) {
     { kind: 'check', Icon: ListTodo, title: '체크리스트' },
   ];
 
-  return <div className="editor-inner">
+  return <div className={`editor-workspace${summaryOpen && gptConnected ? ' summary-visible' : ''}`}>
+    <div className="editor-document"><div className="editor-inner">
     <div className="editor-top">
       <span className="status" id="save-status">{status}{status === '모든 변경 사항 저장됨' && <span className="inline-flex items-center gap-1"> · <syncInfo.Icon size={12} />{syncInfo.label}</span>}</span>
       <span className="spacer" />
-      <Button variant="outline" size="sm" data-action="open-summary" disabled={uploading || conflict} onClick={() => setSummaryOpen(value => !value)}>일기 요약</Button>
+      {gptConnected && <Button variant="outline" size="sm" data-action="open-summary" aria-expanded={summaryOpen} aria-controls="diary-summary-sidebar" disabled={uploading || conflict} onClick={() => setSummaryOpen(value => !value)}>일기 요약</Button>}
       {conflict && <Button variant="outline" size="xs" data-action="save-draft-copy" onClick={copyDraft}>내 편집 내용 별도 저장</Button>}
       <Button variant="ghost" size="icon-sm" data-action="favorite-entry" title="즐겨찾기" aria-label="즐겨찾기" onClick={() => updateField('favorite', !fields.favorite)}>
         <Heart size={17} fill={fields.favorite ? 'currentColor' : 'none'} />
@@ -186,7 +190,6 @@ export function EntryEditor({ entry }: { entry: Entry }) {
       </div>
     </div>
     {entryConflict && <ConflictPanel conflict={entryConflict} />}
-    {summaryOpen && <SummaryPanel entryId={entry.id} onClose={() => setSummaryOpen(false)} prepare={async () => await saveCurrent() ? expected.current.updated_at : null} />}
     <input className="editor-title" id="entry-title"
       placeholder="제목 없는 일기" value={fields.title} onChange={event => updateField('title', event.target.value)} />
     <div className="editor-meta">
@@ -231,5 +234,7 @@ export function EntryEditor({ entry }: { entry: Entry }) {
     </div>
     <input id="attach-file" ref={attachInput} type="file" accept="image/*,video/*,audio/*,.pdf" multiple hidden onChange={attachFiles} />
     <input id="inline-image-file" ref={imageInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden onChange={insertImage} />
+    </div></div>
+    {summaryOpen && gptConnected && <SummaryPanel entryId={entry.id} onClose={() => setSummaryOpen(false)} prepare={async () => await saveCurrent() ? expected.current.updated_at : null} />}
   </div>;
 }

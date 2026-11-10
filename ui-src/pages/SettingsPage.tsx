@@ -26,7 +26,7 @@ export function SettingsPage() {
   const descriptions: Record<string, string> = {
     profile: data.nickname?.trim() ? `현재 별명: ${data.nickname.trim()}` : '현재 별명: 안녕하세요!',
     sync: data.sync_status.connected ? accountLabel(data.sync_status) : 'Google 로그인 가능',
-    codex: 'Codex 연결 · GPT-6 Luna',
+    codex: 'GPT 연결 · GPT-6 Luna',
     backup: '가져오기 및 백업 파일 관리', templates: `저장된 서식 ${data.templates.length}개`,
     lock: data.lock_enabled ? '화면 잠금 사용 중' : '화면 잠금 해제됨',
     about: `v${data.app_version}${update?.update_available ? ` · v${update.latest_version} 업데이트 가능` : ' · 자동 업데이트 관리'}`,
