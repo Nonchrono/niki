@@ -206,6 +206,9 @@
   .row-start-1 {
     grid-row-start: 1;
   }
+  .mt-4 {
+    margin-top: calc(var(--spacing) * 4);
+  }
   .flex {
     display: flex;
   }
@@ -2394,6 +2397,23 @@
   [data-slot="native-select"] {
     background-image: none;
   }
+  .brand-greeting {
+    display: flex;
+    min-width: 0;
+  }
+  .brand-nickname {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .brand-honorific {
+    flex: none;
+    white-space: pre;
+  }
+  .brand-welcome {
+    display: block;
+    margin-top: 2px;
+  }
   .list-head {
     padding-bottom: 12px;
   }
@@ -2456,10 +2476,67 @@
     grid-template-columns: repeat(7, minmax(0, 1fr));
   }
   .calendar .day {
+    display: flex;
+    flex-direction: column;
     min-width: 0;
+    min-height: 112px;
+  }
+  .day-content {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+  }
+  .calendar .day-head {
+    flex: none;
+    width: 100%;
+  }
+  .calendar .day-head span {
+    margin-bottom: 0;
   }
   .calendar .day-number {
     flex-shrink: 0;
+  }
+  .day-entries {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    width: 100%;
+  }
+  .calendar .day em {
+    font-size: 11px;
+    line-height: 18px;
+  }
+  .day-more {
+    align-self: flex-start;
+    flex: none;
+    margin-top: 6px;
+    padding: 3px 5px;
+    border: 0;
+    border-radius: 4px;
+    background: var(--muted);
+    color: var(--primary);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 16px;
+    text-align: left;
+  }
+  .day-more:hover {
+    background: var(--accent);
+  }
+  .day-content:focus-visible, .day-more:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: 4px;
   }
   .trash-head {
     justify-content: space-between;

@@ -26,6 +26,7 @@ export function AppShell() {
   const [journalMenu, setJournalMenu] = useState<{ journal: Journal; x: number; y: number } | null>(null);
   if (!data) return <div className="empty">불러오는 중…</div>;
 
+  const nickname = data.nickname?.trim();
   const active = data.entries.filter(entry => !entry.deleted_at);
   const timeline = location.pathname.startsWith('/all') || location.pathname.startsWith('/journals/');
   const title = timeline ? '' : location.pathname.startsWith('/settings') ? '설정'
@@ -61,7 +62,9 @@ export function AppShell() {
   return <div className={`shell${collapsed ? ' collapsed' : ''}`}>
     <aside className="sidebar">
       <div className="brand">
-        <span className="brand-text" title={data.nickname || '안녕하세요!'}>{data.nickname?.trim() || '안녕하세요!'}</span>
+        <span className="brand-text" title={nickname ? `${nickname} 님,\n어서오세요.` : '안녕하세요!'}>
+          {nickname ? <><span className="brand-greeting"><span className="brand-nickname">{nickname}</span><span className="brand-honorific">{' 님,'}</span></span><span className="brand-welcome">어서오세요.</span></> : '안녕하세요!'}
+        </span>
         <Button variant="outline" size="icon-sm" className="sidebar-toggle"
           title={collapsed ? '메뉴바 열기' : '메뉴바 접기'} aria-label={collapsed ? '메뉴바 열기' : '메뉴바 접기'}
           onClick={() => setCollapsed(!collapsed)}>

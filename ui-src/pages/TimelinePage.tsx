@@ -76,7 +76,7 @@ export function TimelinePage() {
           <div className="empty-art"><PenLine size={32} /></div>
           <h2>오늘의 일기를 써 보세요</h2>
           <p>작은 순간도 시간이 지나면 소중한 이야기가 됩니다.</p>
-          <Button size="sm" data-action="new-entry" onClick={() => document.querySelector<HTMLButtonElement>('.topbar [data-action="new-entry"]')?.click()}>
+          <Button size="sm" className="mt-4" data-action="new-entry" onClick={() => document.querySelector<HTMLButtonElement>('.topbar [data-action="new-entry"]')?.click()}>
             <Plus />새 일기 쓰기
           </Button>
         </div>}
