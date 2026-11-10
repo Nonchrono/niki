@@ -46,7 +46,8 @@ if [ ! -f icons/icon.icns ] && [ -f icons/icon.png ]; then
   rm -rf "$(dirname "$ICONSET_TMP")"
 fi
 
-cp icons/icon.icns "$APP_DIR/Contents/Resources/icon.icns"
+ICON_NAME="icon-$(shasum -a 256 icons/icon.icns | awk '{print $1}').icns"
+cp icons/icon.icns "$APP_DIR/Contents/Resources/$ICON_NAME"
 
 cat > "$APP_DIR/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -60,7 +61,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
   <key>CFBundleExecutable</key>
   <string>Niki</string>
   <key>CFBundleIconFile</key>
-  <string>icon.icns</string>
+  <string>${ICON_NAME}</string>
   <key>CFBundleIdentifier</key>
   <string>app.niki.journal</string>
   <key>CFBundleInfoDictionaryVersion</key>

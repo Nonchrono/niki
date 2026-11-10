@@ -20,7 +20,7 @@ export function TimelinePage() {
 
   const date = params.get('date') || '';
   const active = data.entries.filter(entry => !entry.deleted_at);
-  const name = data.journals.find(journal => journal.id === journalId)?.name || '모든 기록';
+  const name = data.journals.find(journal => journal.id === journalId)?.name || '전체 일기';
   const search = query.trim().toLocaleLowerCase();
   const entries = active.filter(entry =>
     (!journalId || entry.journal_id === journalId)
@@ -38,9 +38,9 @@ export function TimelinePage() {
     <section className="list-pane">
       <div className="list-head">
         <h2>{date ? dateLabel(date) : name}</h2>
-        <div className="subtle">{entries.length}개의 기록 {date && <button className="text-link" data-action="clear-date" onClick={() => setParams({})}>날짜 필터 지우기</button>}</div>
+        <div className="subtle">{entries.length}개의 일기 {date && <button className="text-link" data-action="clear-date" onClick={() => setParams({})}>날짜 필터 지우기</button>}</div>
         <label className="search-wrap list-search"><span aria-hidden="true"><Search size={15} /></span>
-          <Input id="search" className="search h-9 !pl-10" aria-label="기록, 태그, 장소 검색" placeholder="기록, 태그, 장소 검색" value={query} onChange={event => setQuery(event.target.value)} />
+          <Input id="search" className="search h-9 !pl-10" aria-label="일기, 태그, 장소 검색" placeholder="일기, 태그, 장소 검색" value={query} onChange={event => setQuery(event.target.value)} />
         </label>
       </div>
       <div className="list-controls">
@@ -57,7 +57,7 @@ export function TimelinePage() {
           className={`entry-card ${entryId === entry.id ? 'active' : ''}`}
           data-action="entry" data-id={entry.id} onClick={() => void go(`${base}/entries/${entry.id}`)}>
           <div className="entry-date">{dateLabel(entry.date)}{!journalId && ` · ${data.journals.find(journal => journal.id === entry.journal_id)?.name || '일기장'}`}</div>
-          <h3>{entry.title || '제목 없는 기록'}</h3>
+          <h3>{entry.title || '제목 없는 일기'}</h3>
           <p>{plainText(entry.body.slice(0, 1200)) || '내용을 적어 보세요'}</p>
           <div className="entry-meta">
             {entry.favorite && <span title="즐겨찾기"><Heart size={11} fill="currentColor" /></span>}
@@ -67,17 +67,17 @@ export function TimelinePage() {
               : data.synced_entry_ids.includes(entry.id) && <span title="동기화됨"><Cloud size={11} /></span>}
             {entry.tags.slice(0, 2).map(value => <span key={value}>#{value}</span>)}
           </div>
-        </button>) : <div className="empty"><p>조건에 맞는 기록이 없습니다.</p></div>}
+        </button>) : <div className="empty"><p>조건에 맞는 일기가 없습니다.</p></div>}
       </div>
     </section>
     <section className="editor-pane" id="editor-pane">
       {selected ? <EntryEditor key={selected.id} entry={selected} />
         : <div className="empty" style={{ height: '100%' }}>
           <div className="empty-art"><PenLine size={32} /></div>
-          <h2>오늘을 기록해 보세요</h2>
+          <h2>오늘의 일기를 써 보세요</h2>
           <p>작은 순간도 시간이 지나면 소중한 이야기가 됩니다.</p>
           <Button size="sm" data-action="new-entry" onClick={() => document.querySelector<HTMLButtonElement>('.topbar [data-action="new-entry"]')?.click()}>
-            <Plus />새 기록 쓰기
+            <Plus />새 일기 쓰기
           </Button>
         </div>}
     </section>

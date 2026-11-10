@@ -25,6 +25,17 @@ const APP_ICON_ICNS: &[u8] = include_bytes!("../../icons/icon.icns");
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn icon_file_name(bytes: &[u8], extension: &str) -> String {
+    use ring::digest::{SHA256, digest};
+    let hash: String = digest(&SHA256, bytes)
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("icon-{hash}.{extension}")
+}
+
 #[cfg(target_os = "windows")]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct WindowsInstallSettings {
@@ -330,7 +341,8 @@ pub fn create_macos_app_bundle(src_binary: &Path, bundle_path: &Path) -> Result<
     fs::set_permissions(&target_bin, perms)
         .map_err(|e| format!("실행 파일 권한 설정 실패: {e}"))?;
 
-    let icon_path = resources_dir.join("icon.icns");
+    let icon_name = icon_file_name(APP_ICON_ICNS, "icns");
+    let icon_path = resources_dir.join(&icon_name);
     fs::write(&icon_path, APP_ICON_ICNS)
         .map_err(|e| format!("아이콘 파일 기록 실패: {e}"))?;
 
@@ -346,7 +358,7 @@ pub fn create_macos_app_bundle(src_binary: &Path, bundle_path: &Path) -> Result<
   <key>CFBundleExecutable</key>
   <string>Niki</string>
   <key>CFBundleIconFile</key>
-  <string>icon.icns</string>
+  <string>{icon_name}</string>
   <key>CFBundleIdentifier</key>
   <string>app.niki.journal</string>
   <key>CFBundleInfoDictionaryVersion</key>
@@ -379,7 +391,19 @@ pub fn create_macos_app_bundle(src_binary: &Path, bundle_path: &Path) -> Result<
         .arg(bundle_path)
         .status();
 
+    refresh_macos_app_registration(bundle_path);
+
     Ok(bundle_path.to_path_buf())
+}
+
+#[cfg(target_os = "macos")]
+pub fn refresh_macos_app_registration(bundle_path: &Path) {
+    // Refresh this bundle only; do not restart Finder/Dock or clear global caches.
+    let _ = Command::new("/usr/bin/touch").arg(bundle_path).status();
+    let _ = Command::new("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
+        .arg("-f")
+        .arg(bundle_path)
+        .status();
 }
 
 #[cfg(target_os = "windows")]
@@ -391,7 +415,7 @@ pub fn run_installer_ui(silent: bool) -> Result<PathBuf, String> {
     let target_dir = settings.directory.clone();
     validate_windows_install_dir(&target_dir)?;
     let target_exe = target_dir.join("Niki.exe");
-    let target_ico = target_dir.join("icon.ico");
+    let target_ico = target_dir.join(icon_file_name(APP_ICON_ICO, "ico"));
     let current_exe = env::current_exe().map_err(|e| e.to_string())?;
     let previous_dir = read_windows_install_settings()
         .map(|old| old.directory)
@@ -427,6 +451,9 @@ pub fn run_installer_ui(silent: bool) -> Result<PathBuf, String> {
     }
 
     fs::write(&target_ico, APP_ICON_ICO).map_err(|e| format!("아이콘 파일 저장 실패: {e}"))?;
+    // Keep the old path valid for user-created shortcuts and earlier installs.
+    fs::write(target_dir.join("icon.ico"), APP_ICON_ICO)
+        .map_err(|e| format!("호환 아이콘 파일 저장 실패: {e}"))?;
 
     let exe_size_kb = fs::metadata(&target_exe)
         .map(|m| (m.len() / 1024) as u32)
@@ -446,6 +473,7 @@ pub fn run_installer_ui(silent: bool) -> Result<PathBuf, String> {
         // unrelated files if the user chose a shared folder.
         let _ = fs::remove_file(previous_dir.join("Niki.exe"));
         let _ = fs::remove_file(previous_dir.join("icon.ico"));
+        remove_cached_windows_icons(&previous_dir);
         let _ = fs::remove_dir(&previous_dir);
     }
 
@@ -456,6 +484,18 @@ pub fn run_installer_ui(silent: bool) -> Result<PathBuf, String> {
     }
 
     Ok(target_exe)
+}
+
+#[cfg(target_os = "windows")]
+fn remove_cached_windows_icons(directory: &Path) {
+    let Ok(files) = fs::read_dir(directory) else { return };
+    for file in files.flatten() {
+        let name = file.file_name();
+        let Some(hash) = name.to_str().and_then(|name| name.strip_prefix("icon-")).and_then(|name| name.strip_suffix(".ico")) else { continue };
+        if hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            let _ = fs::remove_file(file.path());
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -555,6 +595,9 @@ $ErrorActionPreference = 'SilentlyContinue'
 Wait-Process -Id ([int]$env:NIKI_SELF_PID) -Timeout 30 -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $env:NIKI_DIR 'Niki.exe') -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $env:NIKI_DIR 'icon.ico') -Force -ErrorAction SilentlyContinue
+Get-ChildItem -LiteralPath $env:NIKI_DIR -File -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -cmatch '^icon-[0-9a-f]{64}\.ico$' } |
+  ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
 Remove-Item -LiteralPath $env:NIKI_DIR -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $env:NIKI_SETTINGS -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Split-Path -Parent $env:NIKI_SETTINGS) -ErrorAction SilentlyContinue
@@ -640,6 +683,7 @@ if ($desktop -and $env:NIKI_DESKTOP_SHORTCUT -ne '1') {
   Remove-Item -LiteralPath (Join-Path $desktop 'Niki.lnk') -Force -ErrorAction SilentlyContinue
 }
 $folders = @($startMenu)
+$changedIcons = @($env:NIKI_EXE, $env:NIKI_ICO, (Join-Path $env:NIKI_DIR 'icon.ico'))
 if ($env:NIKI_DESKTOP_SHORTCUT -eq '1') { $folders += $desktop }
 foreach ($folder in $folders) {
   if ($folder -and (Test-Path -LiteralPath $folder)) {
@@ -649,6 +693,7 @@ foreach ($folder in $folders) {
     $lnk.IconLocation = "$($env:NIKI_ICO),0"
     $lnk.Description = 'Niki - 나만의 일기장'
     $lnk.Save()
+    $changedIcons += Join-Path $folder 'Niki.lnk'
   }
 }
 
@@ -665,11 +710,20 @@ Set-ItemProperty -Path $regPath -Name 'UninstallString' -Value $env:NIKI_UNINSTA
 Set-ItemProperty -Path $regPath -Name 'NoModify' -Value 1 -Type DWord
 Set-ItemProperty -Path $regPath -Name 'NoRepair' -Value 1 -Type DWord
 Set-ItemProperty -Path $regPath -Name 'EstimatedSize' -Value ([int]$env:NIKI_SIZE_KB) -Type DWord
+
+try {
+  $pins = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'Microsoft\Internet Explorer\Quick Launch\User Pinned'
+  $changedIcons += @(Update-NikiShortcutIcons -Shell $wsh -Executable $env:NIKI_EXE -Icon $env:NIKI_ICO -Folders @($desktop, $startMenu, (Join-Path $pins 'TaskBar'), (Join-Path $pins 'StartMenu')))
+  Send-NikiIconChange -Paths $changedIcons
+} catch {
+  Write-Warning "Niki was installed, but the shell icon refresh failed: $($_.Exception.Message)"
+}
 "#;
 
     let _ = UNINSTALL_REG_KEY;
+    let script = format!("{}\n{script}", include_str!("windows_icons.ps1"));
     run_powershell(
-        script,
+        &script,
         &[
             ("NIKI_DIR", &dir_s),
             ("NIKI_EXE", &exe_s),
@@ -784,7 +838,7 @@ fn run_powershell(script: &str, env_vars: &[(&str, &str)]) -> Result<(), String>
 
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
-    use super::{WindowsInstallSettings, normalize_path, validate_windows_install_dir};
+    use super::{WindowsInstallSettings, icon_file_name, normalize_path, remove_cached_windows_icons, validate_windows_install_dir};
     use std::path::Path;
 
     #[test]
@@ -806,5 +860,34 @@ mod tests {
         let decoded: WindowsInstallSettings = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(decoded.directory, settings.directory);
         assert!(!decoded.desktop_shortcut);
+    }
+
+    #[test]
+    fn changed_icon_uses_a_new_shell_cache_path() {
+        let old = icon_file_name(b"previous artwork", "ico");
+        let new = icon_file_name(b"new artwork", "ico");
+        assert_ne!(old, new);
+        assert_eq!(new, icon_file_name(b"new artwork", "ico"));
+        assert!(new.starts_with("icon-") && new.ends_with(".ico"));
+        assert_eq!(new.len(), 5 + 64 + 4);
+    }
+
+    #[test]
+    fn icon_cleanup_preserves_unrelated_files() {
+        let directory = std::env::temp_dir().join(format!("niki-icon-cleanup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let generated = directory.join(icon_file_name(b"old icon", "ico"));
+        std::fs::write(&generated, b"old icon").unwrap();
+        for name in ["icon.ico", "icon-custom.ico", "journal.json"] {
+            std::fs::write(directory.join(name), b"preserve").unwrap();
+        }
+        remove_cached_windows_icons(&directory);
+        assert!(!generated.exists());
+        for name in ["icon.ico", "icon-custom.ico", "journal.json"] {
+            let path = directory.join(name);
+            assert_eq!(std::fs::read(&path).unwrap(), b"preserve");
+            std::fs::remove_file(path).unwrap();
+        }
+        std::fs::remove_dir(directory).unwrap();
     }
 }

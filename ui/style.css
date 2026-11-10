@@ -340,6 +340,12 @@
   .border-border {
     border-color: var(--border);
   }
+  .border-destructive\/30 {
+    border-color: var(--destructive);
+    @supports (color: color-mix(in lab, red, red)) {
+      border-color: color-mix(in oklab, var(--destructive) 30%, transparent);
+    }
+  }
   .border-input {
     border-color: var(--input);
   }
@@ -366,6 +372,9 @@
   }
   .bg-transparent {
     background-color: transparent;
+  }
+  .bg-white {
+    background-color: var(--color-white);
   }
   .px-0 {
     padding-inline: 0px;
@@ -543,6 +552,14 @@
     .hover\:bg-accent:hover {
       background-color: var(--accent);
     }
+    .hover\:bg-destructive\/5:hover {
+      background-color: var(--destructive);
+    }
+    @supports (color: color-mix(in lab, red, red)) {
+      .hover\:bg-destructive\/5:hover {
+        background-color: color-mix(in oklab, var(--destructive) 5%, transparent);
+      }
+    }
     .hover\:bg-destructive\/90:hover {
       background-color: var(--destructive);
     }
@@ -569,6 +586,9 @@
     }
     .hover\:text-accent-foreground:hover {
       color: var(--accent-foreground);
+    }
+    .hover\:text-destructive:hover {
+      color: var(--destructive);
     }
     .hover\:underline:hover {
       text-decoration-line: underline;
@@ -2429,6 +2449,171 @@
   }
   .settings-card > [data-slot="button"] {
     align-self: flex-start;
+  }
+  .calendar {
+    width: 100%;
+    max-width: none;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+  }
+  .calendar .day {
+    min-width: 0;
+  }
+  .calendar .day-number {
+    flex-shrink: 0;
+  }
+  .trash-head {
+    justify-content: space-between;
+    gap: 24px;
+    align-items: flex-start;
+  }
+  .trash-heading {
+    min-width: 0;
+  }
+  .trash-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .trash-count {
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: var(--secondary);
+    color: var(--primary);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .trash-heading > p {
+    margin-top: 8px;
+    color: #657769;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .trash-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--card);
+    overflow: hidden;
+  }
+  .trash-row {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 22px 24px;
+  }
+  .trash-row + .trash-row {
+    border-top: 1px solid #e8ede6;
+  }
+  .trash-record-icon {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 42px;
+    height: 48px;
+    border-radius: 9px;
+    background: #f0f4ee;
+    color: #7a917c;
+  }
+  .trash-record-icon > svg {
+    width: 21px;
+    height: 21px;
+    stroke-width: 1.5;
+  }
+  .trash-record {
+    flex: 1;
+    min-width: 0;
+  }
+  .trash-record h3 {
+    margin: 0;
+    color: var(--card-foreground);
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+  .trash-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin-top: 5px;
+    color: #657769;
+    font-size: 11px;
+    line-height: 1.6;
+  }
+  .trash-meta > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .trash-journal > i {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+  .trash-meta svg {
+    flex: none;
+    width: 12px;
+    height: 12px;
+  }
+  .trash-preview {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    margin-top: 9px;
+    color: #657769;
+    font-size: 12px;
+    line-height: 1.7;
+  }
+  .trash-preview.is-empty {
+    color: #829084;
+  }
+  .trash-footnote {
+    margin: 14px 0 0;
+    color: #657769;
+    font-size: 11px;
+    line-height: 1.6;
+  }
+  .trash-empty {
+    min-height: 300px;
+    border: 1px dashed var(--border);
+    border-radius: 14px;
+  }
+  .trash-empty h3 {
+    color: #425b49;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .trash-empty p {
+    margin-top: 8px;
+  }
+  .trash-empty .empty-art {
+    width: 56px;
+    height: 56px;
+    border-radius: 18px;
+  }
+  .trash-empty .empty-art > svg {
+    width: 24px;
+    height: 24px;
+    stroke-width: 1.5;
+  }
+  @media (max-width: 1000px) {
+    .trash-row {
+      gap: 14px;
+      padding: 18px;
+    }
+    .trash-record-icon {
+      display: none;
+    }
+    .trash-head {
+      gap: 16px;
+    }
   }
   .weekday.sunday, .date-weekday.sunday {
     color: #dc2626;

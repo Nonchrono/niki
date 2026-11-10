@@ -610,6 +610,8 @@ fn apply_macos_update(bytes: &[u8], info: &UpdateInfo) -> Result<String, String>
             .arg(&target_bundle)
             .status();
 
+        crate::app_installer::refresh_macos_app_registration(&target_bundle);
+
         Command::new("/usr/bin/open")
             .args(["-n", "-a"])
             .arg(&target_bundle)
@@ -660,6 +662,8 @@ fn apply_macos_update(bytes: &[u8], info: &UpdateInfo) -> Result<String, String>
             .args(["-cr"])
             .arg(&target_bundle)
             .status();
+
+        crate::app_installer::refresh_macos_app_registration(&target_bundle);
 
         Command::new("/usr/bin/open")
             .args(["-n", "-a"])

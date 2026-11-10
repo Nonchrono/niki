@@ -174,7 +174,7 @@ fn merge_journal(store: &mut Store, id: &str, remote: Option<Journal>, warnings:
                 store.journals.push(value);
             }
             warnings.push(format!(
-                "일지 '{}'의 동시 변경을 복사본으로 보존했습니다.",
+                "일기장 '{}'의 동시 변경을 복사본으로 보존했습니다.",
                 id
             ));
         }
@@ -264,10 +264,10 @@ fn valid_remote_template(t: &Template) -> bool {
 
 fn validate_remote_entry(entry: &Entry) -> Result<(), String> {
     if entry.id.is_empty() || entry.id.len() > 100 || entry.journal_id.is_empty() {
-        return Err("원격 기록 식별자가 올바르지 않습니다".into());
+        return Err("원격 일기 식별자가 올바르지 않습니다".into());
     }
     if !valid_date(&entry.date) {
-        return Err("원격 기록 날짜 형식이 올바르지 않습니다".into());
+        return Err("원격 일기 날짜 형식이 올바르지 않습니다".into());
     }
     if entry.title.len() > 500
         || entry.body.len() > 2_000_000
@@ -276,7 +276,7 @@ fn validate_remote_entry(entry: &Entry) -> Result<(), String> {
         || entry.tags.len() > 50
         || entry.attachments.len() > 200
     {
-        return Err("원격 기록 크기 한도를 초과했습니다".into());
+        return Err("원격 일기 크기 한도를 초과했습니다".into());
     }
     Ok(())
 }
@@ -537,7 +537,7 @@ fn sync_impl(
         }
         if removed_known {
             summary.warnings.push(
-                "원격 Google Drive에서 이전 동기화 파일이 삭제된 것이 감지되었습니다. 로컬 기록은 유지됩니다."
+                "원격 Google Drive에서 이전 동기화 파일이 삭제된 것이 감지되었습니다. 로컬 일기는 유지됩니다."
                     .into(),
             );
         }
@@ -553,7 +553,7 @@ fn sync_impl(
                 .any(|fid| !present_ids.contains(fid.as_str()))
             {
                 summary.warnings.push(
-                    "원격 Google Drive에서 이전 동기화 파일이 누락된 것이 감지되었습니다. 로컬 기록은 유지됩니다."
+                    "원격 Google Drive에서 이전 동기화 파일이 누락된 것이 감지되었습니다. 로컬 일기는 유지됩니다."
                         .into(),
                 );
             }
@@ -703,7 +703,7 @@ fn sync_impl(
             if !store.journals.iter().any(|j| j.id == entry.journal_id) {
                 let fallback = Journal {
                     id: entry.journal_id.clone(),
-                    name: "동기화된 일지".into(),
+                    name: "동기화된 일기장".into(),
                     ..Journal::default()
                 };
                 store
@@ -835,7 +835,7 @@ fn sync_impl(
                 &mut save_checkpoint,
             )?;
         } else {
-            return Err("삭제된 기록의 충돌 해결 내용을 업로드할 수 없습니다".into());
+            return Err("삭제된 일기의 충돌 해결 내용을 업로드할 수 없습니다".into());
         }
     }
 
@@ -1165,7 +1165,7 @@ mod tests {
         fs::write(dir_a.join("media").join(&attachment_id), bytes).unwrap();
         let entry = Entry {
             journal_id: journal.id.clone(),
-            body: "**기존 기록**".into(),
+            body: "**기존 일기**".into(),
             attachments: vec![Attachment {
                 id: attachment_id.clone(),
                 name: "photo.png".into(),
@@ -1333,7 +1333,7 @@ mod tests {
 
         let journal_a = Journal {
             id: "journal-main".into(),
-            name: "일상 기록".into(),
+            name: "일상 일기".into(),
             color: "#3b6e5c".into(),
             created_at: "2026-10-29T00:00:00Z".into(),
         };
@@ -1345,7 +1345,7 @@ mod tests {
             id: "entry-1".into(),
             journal_id: journal_a.id.clone(),
             title: "첫 번째 일기".into(),
-            body: format!("## 오늘\n**사진**과 함께 남긴 기록\n\n![photo.png](niki-media:{att_id})\n\n- [x] 산책\n- [ ] 독서"),
+            body: format!("## 오늘\n**사진**과 함께 남긴 일기\n\n![photo.png](niki-media:{att_id})\n\n- [x] 산책\n- [ ] 독서"),
             date: "2026-10-29".into(),
             tags: vec!["여행".into()],
             attachments: vec![Attachment {
@@ -1666,7 +1666,7 @@ mod tests {
         let dir_a = temp_device_dir("metadata-a");
         let dir_b = temp_device_dir("metadata-b");
         let journal = Journal {
-            name: "첫 일지".into(),
+            name: "첫 일기장".into(),
             ..Journal::default()
         };
         let template = Template {
@@ -1690,15 +1690,15 @@ mod tests {
         a.templates.push(template);
         sync_with_transport(&mut a, &dir_a, &client, |_| Ok(())).unwrap();
         sync_with_transport(&mut b, &dir_b, &client, |_| Ok(())).unwrap();
-        a.journals[0].name = "A 일지".into();
+        a.journals[0].name = "A 일기장".into();
         a.templates[0].name = "A 서식".into();
-        b.journals[0].name = "B 일지".into();
+        b.journals[0].name = "B 일기장".into();
         b.templates[0].name = "B 서식".into();
         sync_with_transport(&mut a, &dir_a, &client, |_| Ok(())).unwrap();
         let summary = sync_with_transport(&mut b, &dir_b, &client, |_| Ok(())).unwrap();
         assert_eq!(summary.warnings.len(), 2);
-        assert!(b.journals.iter().any(|j| j.name == "A 일지"));
-        assert!(b.journals.iter().any(|j| j.name.starts_with("B 일지")));
+        assert!(b.journals.iter().any(|j| j.name == "A 일기장"));
+        assert!(b.journals.iter().any(|j| j.name.starts_with("B 일기장")));
         assert!(b.templates.iter().any(|t| t.name == "A 서식"));
         assert!(b.templates.iter().any(|t| t.name.starts_with("B 서식")));
         sync_with_transport(&mut a, &dir_a, &client, |_| Ok(())).unwrap();

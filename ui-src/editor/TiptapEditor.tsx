@@ -32,7 +32,7 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(function Tipta
       element: host.current,
       extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: false }, dropcursor: false }), Markdown.configure({ markedOptions: { breaks: true } }), TaskList, TaskItem.configure({ nested: true }), NikiImage.configure({ resolveImage: (id: string) => resolveRef.current(id) }), Placeholder.configure({ placeholder: '오늘의 이야기를 시작해 보세요...' })],
       content: initialBody, contentType: 'markdown', enableInputRules: false, enablePasteRules: false,
-      editorProps: { attributes: { class: 'editor-body', role: 'textbox', 'aria-label': '기록 본문', 'aria-multiline': 'true' } },
+      editorProps: { attributes: { class: 'editor-body', role: 'textbox', 'aria-label': '일기 본문', 'aria-multiline': 'true' } },
       onUpdate: () => { dirty.current = true; onChangeRef.current(); },
     });
     editor.current = instance;
@@ -81,5 +81,5 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(function Tipta
     },
   }), [initialBody, source]);
 
-  return source ? <><p className="editor-source-notice">이 기록에는 서식 편집기에서 지원하지 않는 내용이 있어 원문으로 표시합니다.</p><textarea className="editor-source" ref={textarea} defaultValue={initialBody} aria-label="기록 본문" onInput={() => onChangeRef.current()} /></> : <div ref={host} />;
+  return source ? <><p className="editor-source-notice">이 일기에는 서식 편집기에서 지원하지 않는 내용이 있어 원문으로 표시합니다.</p><textarea className="editor-source" ref={textarea} defaultValue={initialBody} aria-label="일기 본문" onInput={() => onChangeRef.current()} /></> : <div ref={host} />;
 });

@@ -81,8 +81,8 @@ export function EntryEditor({ entry }: { entry: Entry }) {
         } catch (error) {
           dirty.current = true;
           persist();
-          const stale = errorMessage(error).includes('다른 기기에서 이 기록이 변경');
-          setConflict(stale); setStatus(stale ? '기록이 변경되어 저장할 수 없습니다' : '저장 실패');
+          const stale = errorMessage(error).includes('다른 기기에서 이 일기가 변경');
+          setConflict(stale); setStatus(stale ? '일기가 변경되어 저장할 수 없습니다' : '저장 실패');
           toast(errorMessage(error), true);
           return false;
         }
@@ -104,7 +104,7 @@ export function EntryEditor({ entry }: { entry: Entry }) {
     const draft = readDraft(entry);
     if (!draft) return;
     let cancelled = false;
-    void askConfirm('이 기록에 저장되지 않은 편집 내용이 있습니다. 복원할까요? 삭제를 선택하면 임시 편집 내용이 사라집니다.', { okLabel: '복원', cancelLabel: '삭제' }).then(restore => {
+    void askConfirm('이 일기에 저장되지 않은 편집 내용이 있습니다. 복원할까요? 삭제를 선택하면 임시 편집 내용이 사라집니다.', { okLabel: '복원', cancelLabel: '삭제' }).then(restore => {
       if (cancelled) return;
       if (!restore) { clearDraft(); return; }
       const restored: Fields = { title: draft.title, date: draft.date, journalId: draft.journalId, favorite: draft.favorite, tags: draft.tags, location: draft.location, weather: draft.weather };
@@ -146,7 +146,7 @@ export function EntryEditor({ entry }: { entry: Entry }) {
     void task.catch(error => toast(errorMessage(error), true)).finally(() => { uploadPromise.current = null; });
   };
   const attachFiles = (event: ChangeEvent<HTMLInputElement>) => { const files = Array.from(event.target.files || []); event.target.value = ''; void action(async () => { if (!await leave()) throw Error('기존 편집 내용을 저장하지 못했습니다'); for (const file of files) await run('add_attachment', { entryId: entry.id, name: file.name, mime: file.type || 'application/octet-stream', data: await fileBase64(file) }); const next = await refresh(); const updated = next.entries.find(item => item.id === entry.id); if (updated) { expected.current = updated; setAttachments(updated.attachments); } toast('첨부 파일 저장됨'); }); };
-  const copyDraft = () => void action(async () => { const draft = input(); const newId = await run<string>('save_entry', { input: { ...draft, id: null, expectedEntry: null } }); clearDraft(); dirty.current = false; setConflict(false); await refresh(); await go(`/journals/${draft.journalId}/entries/${newId}`); toast('편집 내용을 별도 기록으로 저장했습니다'); });
+  const copyDraft = () => void action(async () => { const draft = input(); const newId = await run<string>('save_entry', { input: { ...draft, id: null, expectedEntry: null } }); clearDraft(); dirty.current = false; setConflict(false); await refresh(); await go(`/journals/${draft.journalId}/entries/${newId}`); toast('편집 내용을 별도 일기로 저장했습니다'); });
   const entryConflict = data?.sync_conflicts.find(item => item.entry_id === entry.id);
   const syncInfo = entryConflict
     ? { Icon: TriangleAlert, label: '동기화 충돌' }
@@ -173,10 +173,10 @@ export function EntryEditor({ entry }: { entry: Entry }) {
       </Button>
       <Button variant="outline" size="sm" data-action="print" onClick={() => void action(async () => { if (await leave()) window.print(); })}><Printer />인쇄 / PDF</Button>
       <div className="entry-menu-anchor">
-        <Button variant="ghost" size="icon-sm" data-action="entry-menu" title="기록 메뉴" aria-label="기록 메뉴" aria-haspopup="menu" onClick={() => setMenu(!menu)}><Ellipsis /></Button>
+        <Button variant="ghost" size="icon-sm" data-action="entry-menu" title="일기 메뉴" aria-label="일기 메뉴" aria-haspopup="menu" onClick={() => setMenu(!menu)}><Ellipsis /></Button>
         {menu && <div className="context-menu" role="menu"><button className="context-menu-item danger" role="menuitem" data-action="trash-entry" onClick={() => void action(async () => {
           setMenu(false);
-          if (!await askConfirm('이 기록을 휴지통으로 이동할까요?', { okLabel: '휴지통으로 이동', danger: true })) return;
+          if (!await askConfirm('이 일기를 휴지통으로 이동할까요?', { okLabel: '휴지통으로 이동', danger: true })) return;
           if (!await leave()) throw Error('편집 내용을 저장하지 못했습니다');
           await run('trash_entry', { id: entry.id }); await refresh(); await go('/all');
         })}><Trash2 size={15} />휴지통으로 이동</button></div>}
@@ -184,7 +184,7 @@ export function EntryEditor({ entry }: { entry: Entry }) {
     </div>
     {entryConflict && <ConflictPanel conflict={entryConflict} />}
     <input className="editor-title" id="entry-title"
-      placeholder="제목 없는 기록" value={fields.title} onChange={event => updateField('title', event.target.value)} />
+      placeholder="제목 없는 일기" value={fields.title} onChange={event => updateField('title', event.target.value)} />
     <div className="editor-meta">
       <DatePicker value={fields.date} onChange={value => updateField('date', value)} />
       <span className="inline-flex items-center gap-1"><NotebookText size={13} />

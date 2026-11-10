@@ -38,7 +38,7 @@ export function CalendarPage() {
             <span className="day-number">{date.getDate()}</span>
             {holiday && <span className="day-holiday" title={holiday.localName}>{holiday.localName}</span>}
           </div>
-          {entries.slice(0, 3).map(entry => <em key={entry.id}>● {entry.title || '제목 없는 기록'}</em>)}
+          {entries.slice(0, 3).map(entry => <em key={entry.id}>● {entry.title || '제목 없는 일기'}</em>)}
         </button>;
       })}
     </div>

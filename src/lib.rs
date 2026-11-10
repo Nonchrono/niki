@@ -45,7 +45,7 @@ impl Default for Journal {
     fn default() -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
-            name: "새 일지".into(),
+            name: "새 일기장".into(),
             color: "#576b61".into(),
             created_at: now(),
         }
@@ -562,7 +562,7 @@ async fn drive_sync_now_inner(state: &AppState) -> Result<sync_engine::SyncSumma
 
         let account=account_email.as_ref().filter(|email| !email.trim().is_empty()).ok_or("Google 계정 이메일을 확인할 수 없어 동기화를 중단했습니다")?.trim().to_ascii_lowercase();
         if working_store.sync_format == 2 && working_store.sync_account.as_deref()!=Some(account.as_str()) {
-            return Err("기존 동기화 계정과 다른 Google 계정입니다. 기록을 보호하기 위해 동기화를 중단했습니다".into());
+            return Err("기존 동기화 계정과 다른 Google 계정입니다. 일기를 보호하기 위해 동기화를 중단했습니다".into());
         }
         let client = drive_transport::DriveClient::new()?;
         if working_store.sync_format == 0 {
@@ -899,7 +899,7 @@ fn resolve_conflict(
     let conflict = store.sync_conflicts[index].clone();
     let current = store.entries.iter().position(|e| e.id == conflict.entry_id);
     if current.map(|i| &store.entries[i]) != conflict.local.as_ref() {
-        return Err("충돌 이후 이 기록이 변경됐습니다. 다시 동기화하세요".into());
+        return Err("충돌 이후 이 일기가 변경됐습니다. 다시 동기화하세요".into());
     }
     if choice == "local" && current.is_none() {
         if let Some(mut deleted) = conflict.remote.clone() {
@@ -914,7 +914,7 @@ fn resolve_conflict(
                 || !valid_date(&remote.date)
                 || !store.journals.iter().any(|j| j.id == remote.journal_id)
             {
-                return Err("원격 기록이 올바르지 않습니다".into());
+                return Err("원격 일기가 올바르지 않습니다".into());
             }
             for attachment in &remote.attachments {
                 let id = Uuid::parse_str(&attachment.id).map_err(|_| "잘못된 첨부 식별자")?;
@@ -1134,7 +1134,7 @@ fn save_journal(
 ) -> Result<String, String> {
     let name = name.trim().to_string();
     if name.is_empty() || name.chars().count() > 80 {
-        return Err("일지 이름은 1~80자여야 합니다".into());
+        return Err("일기장 이름은 1~80자여야 합니다".into());
     }
     if !valid_color(&color) {
         return Err("색상 형식이 잘못되었습니다".into());
@@ -1145,7 +1145,7 @@ fn save_journal(
                 .journals
                 .iter_mut()
                 .find(|j| j.id == id)
-                .ok_or("일지를 찾을 수 없습니다")?;
+                .ok_or("일기장을 찾을 수 없습니다")?;
             journal.name = name;
             journal.color = color;
             Ok(journal.id.clone())
@@ -1171,11 +1171,11 @@ fn delete_journal(state: State<'_, AppState>, id: String) -> Result<(), String> 
             .any(|e| e.journal_id == id && e.deleted_at.is_none())
         {
             return Err(
-                "글이 있는 일지는 삭제할 수 없습니다. 먼저 글을 이동하거나 삭제하세요".into(),
+                "일기가 있는 일기장은 삭제할 수 없습니다. 먼저 일기를 이동하거나 삭제하세요".into(),
             );
         }
         if store.journals.len() <= 1 {
-            return Err("마지막 일지는 삭제할 수 없습니다".into());
+            return Err("마지막 일기장은 삭제할 수 없습니다".into());
         }
         // Trashed entries stay restorable: move them to another journal's trash.
         let fallback = store
@@ -1183,7 +1183,7 @@ fn delete_journal(state: State<'_, AppState>, id: String) -> Result<(), String> 
             .iter()
             .find(|j| j.id != id)
             .map(|j| j.id.clone())
-            .ok_or("마지막 일지는 삭제할 수 없습니다")?;
+            .ok_or("마지막 일기장은 삭제할 수 없습니다")?;
         let ts = now();
         for entry in store.entries.iter_mut().filter(|e| e.journal_id == id) {
             entry.journal_id = fallback.clone();
@@ -1224,7 +1224,7 @@ fn save_entry(state: State<'_, AppState>, input: EntryInput) -> Result<String, S
 #[tauri::command]
 fn save_entry_checked(state: State<'_, AppState>, input: EntryInput) -> Result<SavedEntry, String> {
     if input.id.is_some() && input.expected_entry.is_none() {
-        return Err("편집 시작 시점이 없어 기록을 저장할 수 없습니다".into());
+        return Err("편집 시작 시점이 없어 일기를 저장할 수 없습니다".into());
     }
     save_entry_inner(&state, input)
 }
@@ -1242,7 +1242,7 @@ fn save_entry_inner(state: &AppState, input: EntryInput) -> Result<SavedEntry, S
     }
     mutate(&state, |store| {
         if !store.journals.iter().any(|j| j.id == input.journal_id) {
-            return Err("일지를 찾을 수 없습니다".into());
+            return Err("일기장을 찾을 수 없습니다".into());
         }
         let mut tags: Vec<String> = input
             .tags
@@ -1259,13 +1259,13 @@ fn save_entry_inner(state: &AppState, input: EntryInput) -> Result<SavedEntry, S
                 .entries
                 .iter_mut()
                 .find(|e| e.id == id && e.deleted_at.is_none())
-                .ok_or("글을 찾을 수 없습니다")?;
+                .ok_or("일기를 찾을 수 없습니다")?;
             if input
                 .expected_entry
                 .as_ref()
                 .is_some_and(|expected| expected != entry)
             {
-                return Err("다른 기기에서 이 기록이 변경되었습니다. 현재 편집 내용은 화면에 남아 있습니다. 내용을 복사한 뒤 다시 열어 확인해 주세요".into());
+                return Err("다른 기기에서 이 일기가 변경되었습니다. 현재 편집 내용은 화면에 남아 있습니다. 내용을 복사한 뒤 다시 열어 확인해 주세요".into());
             }
             entry.journal_id = input.journal_id;
             entry.title = input.title;
@@ -1310,7 +1310,7 @@ fn trash_entry(state: State<'_, AppState>, id: String) -> Result<(), String> {
             .entries
             .iter_mut()
             .find(|e| e.id == id)
-            .ok_or("글을 찾을 수 없습니다")?;
+            .ok_or("일기를 찾을 수 없습니다")?;
         let ts = now();
         entry.deleted_at = Some(ts.clone());
         entry.updated_at = ts;
@@ -1325,7 +1325,7 @@ fn restore_entry(state: State<'_, AppState>, id: String) -> Result<(), String> {
             .entries
             .iter_mut()
             .find(|e| e.id == id)
-            .ok_or("글을 찾을 수 없습니다")?;
+            .ok_or("일기를 찾을 수 없습니다")?;
         entry.deleted_at = None;
         entry.updated_at = now();
         Ok(())
@@ -1483,7 +1483,7 @@ fn store_attachment(
             .entries
             .iter_mut()
             .find(|e| e.id == entry_id && e.deleted_at.is_none())
-            .ok_or("글을 찾을 수 없습니다")?;
+            .ok_or("일기를 찾을 수 없습니다")?;
         entry.attachments.push(attachment.clone());
         entry.updated_at = now();
         Ok(entry.clone())
@@ -1520,7 +1520,7 @@ fn detach_attachment(store: &mut Store, entry_id: &str, attachment_id: &str) -> 
         .entries
         .iter_mut()
         .find(|e| e.id == entry_id)
-        .ok_or("글을 찾을 수 없습니다")?;
+        .ok_or("일기를 찾을 수 없습니다")?;
     let cleaned_body = strip_inline_image(&entry.body, attachment_id)?;
     let position = entry
         .attachments
@@ -2000,7 +2000,7 @@ pub fn run() {
                 Store {
                     version: 1,
                     journals: vec![Journal {
-                        name: "나의 일지".into(),
+                        name: "나의 일기장".into(),
                         ..Journal::default()
                     }],
                     ..Store::default()

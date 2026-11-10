@@ -28,7 +28,7 @@ function Version({ title, hint, entry, differs }: { title: string; hint: string;
       {text('장소', shown.location)}{text('날씨 / 메모', shown.weather)}{text('날짜', shown.date)}{text('태그', shown.tags.join(', '))}
       <div className="conflict-body">{shown.body || '(본문 없음)'}</div>
       <p className="conflict-count">{shown.body.length.toLocaleString('ko-KR')}자</p>
-    </> : <p className="conflict-body">이 기록은 삭제되었습니다.</p>}
+    </> : <p className="conflict-body">이 일기는 삭제되었습니다.</p>}
   </div>;
 }
 
@@ -42,7 +42,7 @@ export function ConflictPanel({ conflict, compact = false }: { conflict: Conflic
   return <section className="conflict-panel" data-conflict-id={conflict.id} role="alert">
     <div className="conflict-head"><TriangleAlert size={16} />
       <div><strong>{compact ? (live(conflict.local)?.title || live(conflict.remote)?.title || '제목 없음') : '동기화 충돌'}</strong>
-        <p>두 기기에서 같은 기록이 다르게 수정되었습니다. 남길 버전을 선택하세요. 다른 버전은 사라집니다.{differs.length > 0 && <> 다른 부분: <b>{differs.join(', ')}</b></>}</p></div></div>
+        <p>두 기기에서 같은 일기가 다르게 수정되었습니다. 남길 버전을 선택하세요. 다른 버전은 사라집니다.{differs.length > 0 && <> 다른 부분: <b>{differs.join(', ')}</b></>}</p></div></div>
     <div className="conflict-grid">
       <Version title="이 기기" hint="이 컴퓨터의 버전" entry={conflict.local} differs={differs} />
       <Version title="다른 기기" hint="동기화된 최신 버전" entry={conflict.remote} differs={differs} />

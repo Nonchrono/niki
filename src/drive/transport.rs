@@ -317,7 +317,7 @@ impl DriveClient {
         let file=match find(files)? {
             Some(file)=>file,
             None=>{
-                if has_v2_data { return Err("동기화 키가 없지만 암호화된 기록이 남아 있어 새 키를 만들지 않았습니다".into()); }
+                if has_v2_data { return Err("동기화 키가 없지만 암호화된 일기가 남아 있어 새 키를 만들지 않았습니다".into()); }
                 let key=crate::sync_crypto::generate_key().map_err(str::to_string)?;
                 self.upload_v2_encrypted(token,V2_KEY_UUID,&ACCOUNT_ENVELOPE_KEY,&key)?;
                 find(self.list(token)?)?.ok_or("생성한 동기화 키를 찾을 수 없습니다")?

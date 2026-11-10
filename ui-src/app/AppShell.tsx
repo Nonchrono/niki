@@ -11,10 +11,10 @@ import type { Journal } from '../types';
 import { askConfirm, askText } from '../lib/dialog';
 
 const sections: { path: string; action: string; Icon: LucideIcon; label: string }[] = [
-  { path: '/all', action: 'all', Icon: BookOpenText, label: '전체 기록' },
+  { path: '/all', action: 'all', Icon: BookOpenText, label: '전체 일기' },
   { path: '/calendar', action: 'calendar', Icon: CalendarDays, label: '달력' },
   { path: '/media', action: 'media', Icon: Images, label: '미디어' },
-  { path: '/memories', action: 'memories', Icon: Sparkles, label: '이 날의 기록' },
+  { path: '/memories', action: 'memories', Icon: Sparkles, label: '이날의 일기' },
 ];
 
 export function AppShell() {
@@ -31,7 +31,7 @@ export function AppShell() {
   const title = timeline ? '' : location.pathname.startsWith('/settings') ? '설정'
     : location.pathname.startsWith('/calendar') ? '달력'
     : location.pathname.startsWith('/media') ? '미디어'
-    : location.pathname.startsWith('/memories') ? '이 날의 기록' : '휴지통';
+    : location.pathname.startsWith('/memories') ? '이날의 일기' : '휴지통';
   const navigateSection = (path: string) => go(journalId && ['/calendar', '/media', '/memories'].includes(path)
     ? `${path}?journal=${encodeURIComponent(journalId)}` : path);
   const side = (path: string, actionName: string, Icon: LucideIcon, label: string, count?: number) => (
@@ -102,7 +102,7 @@ export function AppShell() {
           <RefreshCw className={syncing ? 'animate-spin' : ''} />
           {syncing ? '동기화 중' : `동기화${data.sync_status.pending_upload_count ? ` (${data.sync_status.pending_upload_count})` : ''}`}
         </Button>}
-        <Button size="sm" data-action="new-entry" onClick={() => void createEntry()}><Plus />새 기록</Button>
+        <Button size="sm" data-action="new-entry" onClick={() => void createEntry()}><Plus />새 일기</Button>
       </header>
       {update?.update_available && update.latest_version !== data.updater_config?.skipped_version &&
         <div className="update-banner"><strong>새 버전(v{update.latest_version}) 업데이트가 준비되었습니다.</strong>
@@ -132,7 +132,7 @@ export function AppShell() {
           setJournalMenu(null);
         })}><Pencil size={15} />수정</button>
         <button className="context-menu-item danger" data-action="delete-journal" onClick={() => void action(async () => {
-          if (!await askConfirm('일기장을 삭제할까요? 휴지통에 있는 기록은 다른 일기장의 휴지통으로 옮겨집니다.', { okLabel: '삭제', danger: true })) return;
+          if (!await askConfirm('일기장을 삭제할까요? 휴지통에 있는 일기는 다른 일기장의 휴지통으로 옮겨집니다.', { okLabel: '삭제', danger: true })) return;
           await run('delete_journal', { id: journalMenu.journal.id });
           await refresh();
           await go('/all');
