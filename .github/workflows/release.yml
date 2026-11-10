@@ -72,7 +72,8 @@ jobs:
         run: |
           cargo test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test -- --ignored
+          # Live Codex checks require a user login and must never run in CI.
+          cargo test drive_transport::tests -- --ignored
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Prepare version and OAuth config
