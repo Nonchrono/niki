@@ -1,0 +1,62 @@
+# Codex를 통한 일기 요약
+
+## 검증 결과 (2026-11-10)
+
+- 기준 소스: 마지막 릴리즈 `v0.1.22` (`9ceef97`). 이후 CI 최적화 및 기존 Sign in with ChatGPT 구현은 복원 커밋 `a20c924`에서 되돌렸다.
+- Windows에 설치된 공식 `codex-cli 0.167.0`의 app-server를 사용했다. 클라이언트 이름을 Niki로 지정했으며 공식 앱으로 가장하지 않았다.
+- 별도 테스트 환경에서 사용자가 직접 기기 코드 로그인을 완료했다. `account/read`가 `chatgpt`, `free`를 반환했다.
+- `gpt-6-luna`를 명시하고 다른 모델로의 대체를 금지한 실제 요청이 완료됐다. Node 검증 스크립트와 Niki의 Rust 연동 양쪽에서 한국어 예시 일기 요약에 성공했다.
+- 이 결과는 해당 무료 계정의 현재 접근 권한을 확인한 것이다. 모든 무료 계정의 접근, 무제한 사용, 향후 정책을 보장하지 않는다.
+- 실제 일기는 테스트에 사용하지 않았다. 테스트용 로그인은 공식 `account/logout`으로 해제했고 임시 `auth.json` 제거를 확인했다. 기존 Codex 로그인은 변경하지 않았다.
+- Windows 자격 증명 저장소를 사용하는 별도 테스트에서 더미 자격 증명을 저장하고 새 프로세스에서 읽은 뒤 삭제했다. 평문 `auth.json`이 생성되지 않음을 확인했다. macOS 실기기 검증은 아직 하지 않았다.
+
+## 사용 방법
+
+1. 공식 Codex를 설치한다. 현재 확인한 CLI 버전은 0.167.0이다.
+2. Niki의 **설정 → 일기 요약 → ChatGPT 계정으로 연결**을 선택한다.
+3. 표시된 공식 인증 페이지에서 로그인하고 일회용 코드를 입력한다.
+4. 일기를 열고 **일기 요약 → 요약하기**를 선택한다.
+
+사용 가능 여부와 한도는 연결한 계정에 따른다. 계정 권한 오류, 사용 한도, 연결 실패는 화면에 표시하며 다른 모델이나 API 요금제로 자동 전환하지 않는다. Codex는 별도 설치가 필요하며 Niki가 자동으로 다운로드하거나 설치하지 않는다.
+
+## 인증과 데이터 경계
+
+- Niki 데이터 폴더 아래 별도 `codex` 홈을 사용한다. 사용자의 기본 Codex 로그인 파일을 읽거나 복사하지 않는다.
+- 공식 `account/login/start`의 `chatgptDeviceCode` 방식으로 인증하고 `cli_auth_credentials_store="keyring"`을 강제한다. OS 자격 증명 저장소가 실패하면 연결을 실패 처리하며 평문 저장으로 전환하지 않는다.
+- 액세스 토큰과 리프레시 토큰은 Codex가 관리한다. Niki의 프런트엔드, 일기 저장 파일, 백업, Drive 동기화로 전달하지 않는다. 연결 상태는 연결 여부와 플랜만 반환한다.
+- 실행 파일은 설치 경로 또는 절대 PATH 디렉터리에서 찾으며 셸 문자열로 실행하지 않는다. Windows 하위 프로세스에는 창 숨김 옵션을 적용한다.
+- 요약 요청은 앱이 잠기지 않은 상태에서만 가능하다. 서버에서 선택한 일기를 조회해 삭제 여부, 최신 버전, 빈 내용, 60 KB 제한을 검사한다. 편집 저장이 실패하면 전송하지 않는다.
+- OpenAI에 보내는 일기 데이터는 선택한 일기의 제목과 본문이다. 본문에 작성한 링크/이미지 참조 문자열은 포함될 수 있으나 링크를 방문하거나 첨부 파일 내용을 읽지 않는다. 일기장 이름, 별명, 태그, 위치 필드, 다른 일기, 첨부 바이너리는 전달하지 않는다.
+- 요청마다 별도 app-server 프로세스와 임시 대화를 사용한다. 로컬 대화 기록, 분석 텔레메트리, 프롬프트 로깅을 끄고 셸·컴퓨터 조작·파일 변경·웹·플러그인·기억·다중 에이전트 기능을 비활성화한다. 프로젝트/호스트 스킬도 자동으로 넣지 않는다.
+- 서버가 Niki에 도구 실행을 요청하면 거절한다. 읽기 전용 샌드박스와 시간/응답 크기 제한을 적용한다. 요청 종료 시 하위 프로세스를 종료한다.
+- 요약은 텍스트로만 렌더링하고 HTML로 실행하지 않는다. 원문에 자동 반영하거나 localStorage에 저장하지 않는다. 다른 일기로 이동하거나 앱을 잠그면 늦게 도착한 결과를 표시하지 않는다.
+- 상위 서버의 원시 오류는 프롬프트나 인증 정보를 포함할 수 있으므로 사용자에게 그대로 노출하거나 로그에 기록하지 않는다.
+- 테스트 산출물 디렉터리 `output/`은 Git에서 제외한다. 테스트에는 가상 일기만 사용한다.
+
+## 검증 명령
+
+```powershell
+npm run build
+npm test
+cargo test --locked
+```
+
+실제 계정 테스트는 기본 테스트에서 제외한다. 명시적으로 분리된 무료 계정 테스트 홈을 준비한 경우에만 실행한다. 테스트는 완료 후 해당 테스트 홈에서 로그아웃한다.
+
+```powershell
+$env:NIKI_CODEX_TEST_HOME = Join-Path (Get-Location) 'output/codex-free-verification/home'
+cargo test --locked codex::tests::live_free_account_summary -- --ignored --nocapture
+cargo test --locked codex::tests::live_keyring_storage -- --ignored
+```
+
+## 근거
+
+- [공식 Codex app-server 인증·프로토콜](https://learn.chatgpt.com/docs/app-server)
+- [공식 인증 안내](https://learn.chatgpt.com/docs/auth)
+- [공식 요금·접근 안내](https://learn.chatgpt.com/docs/pricing)
+- [공식 설정 스키마](https://learn.chatgpt.com/docs/config-schema.json)
+- [Hermes 제공자 연동](https://hermes-agent.nousresearch.com/docs/integrations/providers)
+
+공식 app-server 문서는 로컬/오픈 소스 앱의 기존 사용과 상업적·호스팅 서비스의 사용을 구분한다. Niki를 상업적 또는 호스팅 서비스로 변경할 경우에는 해당 인증 경로의 적용 가능성을 다시 확인해야 한다.
+
+이번 변경은 릴리즈하지 않았다.

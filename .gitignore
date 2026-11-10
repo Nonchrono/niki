@@ -11,3 +11,4 @@ journal.json
 *.pem
 .DS_Store
 /node_modules
+/output

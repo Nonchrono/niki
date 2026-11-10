@@ -9,11 +9,13 @@ import { ConflictPanel } from '../editor/ConflictPanel';
 import { accountLabel, fileBase64, timeLabel } from '../lib/format';
 import type { Snapshot, UpdateInfo } from '../types';
 import { askConfirm, askText } from '../lib/dialog';
+import { CodexSettings } from '../codex/CodexSettings';
 
 type SettingsProps = { data: Snapshot };
 const tabs = [
   { id: 'profile', title: '별명 설정', icon: Smile },
   { id: 'sync', title: 'Google Drive 동기화', icon: Cloud },
+  { id: 'codex', title: '일기 요약', icon: Info },
   { id: 'backup', title: '가져오기와 백업', icon: ArrowDownUp },
   { id: 'templates', title: '템플릿', icon: LayoutTemplate },
   { id: 'lock', title: '앱 잠금', icon: LockKeyhole },
@@ -24,11 +26,12 @@ export function SettingsPage() {
   const descriptions: Record<string, string> = {
     profile: data.nickname?.trim() ? `현재 별명: ${data.nickname.trim()}` : '현재 별명: 안녕하세요!',
     sync: data.sync_status.connected ? accountLabel(data.sync_status) : 'Google 로그인 가능',
+    codex: 'Codex 연결 · GPT-6 Luna',
     backup: '가져오기 및 백업 파일 관리', templates: `저장된 서식 ${data.templates.length}개`,
     lock: data.lock_enabled ? '화면 잠금 사용 중' : '화면 잠금 해제됨',
     about: `v${data.app_version}${update?.update_available ? ` · v${update.latest_version} 업데이트 가능` : ' · 자동 업데이트 관리'}`,
   };
-  return <><section className="list-pane"><div className="list-head"><h2>설정 목록</h2><div className="subtle">항목을 선택하세요</div></div><div className="entry-list">{tabs.map(item => <button key={item.id} className={`entry-card ${tab === item.id ? 'active' : ''}`} data-action="settings-tab" onClick={() => void go(`/settings/${item.id}`)}><h3 className="flex items-center gap-2"><item.icon size={15} aria-hidden="true" />{item.title}</h3><p>{descriptions[item.id]}</p></button>)}</div></section><section className="wide-view" id="settings-detail">{tab === 'profile' ? <ProfileSettings data={data} /> : tab === 'backup' ? <BackupSettings /> : tab === 'templates' ? <TemplateSettings data={data} /> : tab === 'lock' ? <LockSettings data={data} /> : tab === 'about' ? <AboutSettings data={data} /> : <SyncSettings data={data} />}</section></>;
+  return <><section className="list-pane"><div className="list-head"><h2>설정 목록</h2><div className="subtle">항목을 선택하세요</div></div><div className="entry-list">{tabs.map(item => <button key={item.id} className={`entry-card ${tab === item.id ? 'active' : ''}`} data-action="settings-tab" onClick={() => void go(`/settings/${item.id}`)}><h3 className="flex items-center gap-2"><item.icon size={15} aria-hidden="true" />{item.title}</h3><p>{descriptions[item.id]}</p></button>)}</div></section><section className="wide-view" id="settings-detail">{tab === 'codex' ? <CodexSettings /> : tab === 'profile' ? <ProfileSettings data={data} /> : tab === 'backup' ? <BackupSettings /> : tab === 'templates' ? <TemplateSettings data={data} /> : tab === 'lock' ? <LockSettings data={data} /> : tab === 'about' ? <AboutSettings data={data} /> : <SyncSettings data={data} />}</section></>;
 }
 function ProfileSettings({ data }: SettingsProps) {
   const { run, refresh, action, toast } = useApp(); const [nickname, setNickname] = useState(data.nickname || '');

@@ -12,6 +12,7 @@ import { ConflictPanel } from './ConflictPanel';
 import { DatePicker } from './DatePicker';
 import { TiptapEditor, type TiptapEditorHandle } from './TiptapEditor';
 import { needsSourceEditor } from './markdown';
+import { SummaryPanel } from '../codex/SummaryPanel';
 
 type Fields = Pick<EntryInput, 'title' | 'date' | 'journalId' | 'favorite' | 'tags' | 'location' | 'weather'>;
 const fieldsFrom = (entry: Entry): Fields => ({ title: entry.title, date: entry.date, journalId: entry.journal_id, favorite: entry.favorite, tags: entry.tags, location: entry.location, weather: entry.weather });
@@ -41,6 +42,7 @@ export function EntryEditor({ entry }: { entry: Entry }) {
   const [status, setStatus] = useState(seed.restored ? '저장 대기 중…' : '모든 변경 사항 저장됨');
   const [conflict, setConflict] = useState(false);
   const [menu, setMenu] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const [attachments, setAttachments] = useState(entry.attachments);
   const [uploading, setUploading] = useState(false);
   const attachInput = useRef<HTMLInputElement>(null);
@@ -167,6 +169,7 @@ export function EntryEditor({ entry }: { entry: Entry }) {
     <div className="editor-top">
       <span className="status" id="save-status">{status}{status === '모든 변경 사항 저장됨' && <span className="inline-flex items-center gap-1"> · <syncInfo.Icon size={12} />{syncInfo.label}</span>}</span>
       <span className="spacer" />
+      <Button variant="outline" size="sm" data-action="open-summary" disabled={uploading || conflict} onClick={() => setSummaryOpen(value => !value)}>일기 요약</Button>
       {conflict && <Button variant="outline" size="xs" data-action="save-draft-copy" onClick={copyDraft}>내 편집 내용 별도 저장</Button>}
       <Button variant="ghost" size="icon-sm" data-action="favorite-entry" title="즐겨찾기" aria-label="즐겨찾기" onClick={() => updateField('favorite', !fields.favorite)}>
         <Heart size={17} fill={fields.favorite ? 'currentColor' : 'none'} />
@@ -183,6 +186,7 @@ export function EntryEditor({ entry }: { entry: Entry }) {
       </div>
     </div>
     {entryConflict && <ConflictPanel conflict={entryConflict} />}
+    {summaryOpen && <SummaryPanel entryId={entry.id} onClose={() => setSummaryOpen(false)} prepare={async () => await saveCurrent() ? expected.current.updated_at : null} />}
     <input className="editor-title" id="entry-title"
       placeholder="제목 없는 일기" value={fields.title} onChange={event => updateField('title', event.target.value)} />
     <div className="editor-meta">

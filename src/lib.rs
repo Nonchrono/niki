@@ -16,6 +16,7 @@ mod sync_media;
 mod sync_merge;
 #[path = "archive/zip_read.rs"]
 mod zip_read;
+mod codex;
 
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
@@ -2017,6 +2018,7 @@ pub fn run() {
             {
                 let _ = window.set_icon(icon);
             }
+            app.manage(codex::Service::default());
             app.manage(AppState {
                 data_dir,
                 store: Arc::new(Mutex::new(store)),
@@ -2043,6 +2045,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            codex::codex_status,
+            codex::codex_connect,
+            codex::codex_disconnect,
+            codex::codex_open_login,
+            codex::codex_summarize,
             bootstrap,
             unlock,
             lock,

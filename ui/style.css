@@ -2352,6 +2352,56 @@
     justify-content: flex-end;
     gap: 8px;
   }
+  .codex-summary {
+    margin: 12px 0 20px;
+    padding: 18px;
+    border: 1px solid var(--line, #dce3dc);
+    border-radius: 12px;
+    background: var(--panel, #fff);
+  }
+  .codex-summary-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .codex-summary-head h3 {
+    margin: 0;
+    font-size: 15px;
+  }
+  .codex-summary-head h3 span {
+    margin-left: 8px;
+    font-size: 12px;
+    font-weight: normal;
+  }
+  .codex-summary p, .codex-settings p {
+    line-height: 1.65;
+  }
+  .codex-summary-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    margin: 18px 0;
+  }
+  .codex-login {
+    margin-top: 20px;
+    padding: 16px;
+    background: #edf3ed;
+    border-radius: 10px;
+  }
+  .codex-device-code {
+    display: block;
+    font-size: 22px;
+    letter-spacing: 2px;
+    user-select: all;
+  }
+  .codex-login .subtle {
+    overflow-wrap: anywhere;
+  }
+  @media print {
+    .codex-summary, [data-action="open-summary"] {
+      display: none !important;
+    }
+  }
 }
 :root {
   --radius: 0.625rem;
