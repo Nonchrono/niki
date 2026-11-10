@@ -23,19 +23,19 @@ export function ChatGPTSettings() {
     void load().catch(e => { if (mounted.current) setError(errorMessage(e)); });
     return () => { mounted.current = false; if (pending.current) void run('chatgpt_cancel', { requestId: pending.current }).catch(() => {}); };
   }, [run]);
-  const connect = async (clientId: string | null) => {
+  const connect = async (clientId: string | null, newRegistration = false) => {
     if (pending.current || busy) return;
     const requestId = crypto.randomUUID(); pending.current = requestId;
     setBusy(true); setCancelling(false); setError(''); setNotice('');
     try {
-      const value = await run<ChatGPTStatus>('chatgpt_connect', { requestId, clientId });
+      const value = await run<ChatGPTStatus>('chatgpt_connect', { requestId, clientId, newRegistration });
       if (!mounted.current) return;
       setStatus(value);
       const selected = activeAccount(value);
       if (selected?.plan_enabled && !selected.welcome_seen) setWelcome(true);
       else if (!selected?.plan_enabled) setError('로그인됐지만 ChatGPT 구독 사용 권한이 없습니다. 아래 버튼으로 구독 사용을 허용해 주세요.');
       else toast('ChatGPT 계정이 연결됐습니다');
-    } catch (e) { if (mounted.current) setError(errorMessage(e)); }
+    } catch (e) { if (mounted.current) { setError(errorMessage(e)); await load().catch(() => {}); } }
     finally { pending.current = null; if (mounted.current) { setBusy(false); setCancelling(false); } }
   };
   const cancel = () => { if (!pending.current || cancelling) return; setCancelling(true); void action(() => run('chatgpt_cancel', { requestId: pending.current })); };
@@ -58,7 +58,7 @@ export function ChatGPTSettings() {
       {busy && <p role="status">{pending.current ? cancelling ? '로그인을 취소하고 있습니다…' : '브라우저에서 ChatGPT 로그인을 완료해 주세요. 등록 후 계정 확인 화면이 한 번 더 열릴 수 있습니다. 각 로그인은 최대 4분 동안 기다립니다.' : '연결 정보를 갱신하고 있습니다…'}</p>}
       <div className="panel-actions">
         {!account?.connected || !account.plan_enabled ? <Button className="bg-[#111] text-white hover:bg-[#333]" data-oai-siwc-button="" data-action="chatgpt-connect" disabled={busy || !status} onClick={() => void connect(account?.client_id ?? null)}>Continue with ChatGPT</Button> : null}
-        {status && status.accounts.length > 0 && <Button variant="outline" data-action="chatgpt-add-account" disabled={busy} onClick={() => void connect(null)}>다른 ChatGPT 계정 추가</Button>}
+        {status && (status.accounts.length > 0 || status.pending_registration || error) && <Button variant="outline" data-action="chatgpt-add-account" disabled={busy} onClick={() => void connect(null, true)}>다른 계정·워크스페이스로 연결</Button>}
         {account?.connected && <Button variant="outline" data-action="chatgpt-disconnect" disabled={busy} onClick={() => {
           setBusy(true); setError('');
           void run<string>('chatgpt_disconnect').then(async message => { if (mounted.current) { setNotice(message); await load(); } }).catch(e => { if (mounted.current) setError(errorMessage(e)); }).finally(() => { if (mounted.current) setBusy(false); });
@@ -67,6 +67,12 @@ export function ChatGPTSettings() {
         <Button variant="outline" data-action="chatgpt-usage" onClick={() => void action(() => run('chatgpt_open_usage'))}>사용량 관리</Button>
         {!status && error && <Button variant="outline" onClick={() => { setError(''); void load().catch(e => setError(errorMessage(e))); }}>다시 확인</Button>}
       </div>
+      <details className="mt-5 text-sm">
+        <summary className="cursor-pointer">필수 권한·워크스페이스·플랜 오류가 표시되나요?</summary>
+        <p>공식 안내의 구독 공유 대상은 자격 조건을 충족한 ChatGPT Plus·Pro 계정입니다. ChatGPT에 로그인할 수 있는 것과 Niki에서 구독을 사용할 수 있는 것은 별도 권한입니다.</p>
+        <p>브라우저에서 선택한 계정과 워크스페이스를 확인해 주세요. 이전 등록은 선택했던 워크스페이스에 연결되므로, 다른 항목을 선택하려면 로그인 대기를 취소한 뒤 ‘다른 계정·워크스페이스로 연결’을 사용하세요. 기존 계정 연결은 유지됩니다.</p>
+        <p>개인 Plus·Pro에서도 같은 안내가 나오면 OpenAI 측 계정 자격·정책 확인이 필요할 수 있습니다. 같은 로그인을 반복하거나 플랜을 변경하기 전에 지원 여부를 확인해 주세요.</p>
+      </details>
       <p className="subtle">연결 정보는 이 기기에 보호해서 저장되며 일기 백업과 Google Drive 동기화에 포함되지 않습니다. 다른 기기에서는 따로 연결해 주세요.</p>
     </div>
     {welcome && <Modal title="ChatGPT 구독을 사용합니다" close={acknowledge}>

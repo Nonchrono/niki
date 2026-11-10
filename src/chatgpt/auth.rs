@@ -135,8 +135,8 @@ fn parse_callback(
     if values.get("state").map(String::as_str) != Some(state) {
         return Err("인증 상태가 일치하지 않습니다".into());
     }
-    if values.contains_key("error") {
-        return Err("ChatGPT 연결이 승인되지 않았습니다. 다시 연결하거나 취소해 주세요.".into());
+    if let Some(code) = values.get("error") {
+        return Err(authorization_error(code));
     }
     let code = values
         .get("code")
@@ -150,6 +150,30 @@ fn parse_callback(
         _ => return Err("ChatGPT 앱 등록이 완료되지 않았습니다".into()),
     };
     Ok((code.clone(), client_id))
+}
+
+fn authorization_error(code: &str) -> String {
+    let message = match code {
+        "access_denied" => {
+            "ChatGPT 연결이 취소되었거나 권한이 허용되지 않았습니다. 브라우저의 안내와 선택한 계정·워크스페이스를 확인해 주세요."
+        }
+        "subscription_sharing_user_not_eligible" => {
+            "현재 계정·워크스페이스에서는 ChatGPT 구독 연결을 사용할 수 없습니다. 같은 연결을 반복하지 말고 지원되는 계정·워크스페이스인지 확인해 주세요."
+        }
+        "invalid_scope" => {
+            "ChatGPT가 요청한 연결 권한을 허용하지 않았습니다. 앱의 권한 설정을 확인해야 합니다."
+        }
+        _ => "ChatGPT 로그인을 완료하지 못했습니다. 브라우저의 오류 안내를 확인해 주세요.",
+    };
+    // Never echo arbitrary error_description, codes, URLs, or tokens from a callback.
+    if matches!(
+        code,
+        "access_denied" | "subscription_sharing_user_not_eligible" | "invalid_scope"
+    ) {
+        format!("{message} ({code})")
+    } else {
+        message.into()
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -414,7 +438,7 @@ fn connect_once(
     let (code, client_id) = loop {
         operation.check()?;
         if started.elapsed() > Duration::from_secs(240) {
-            return Err("ChatGPT 로그인 시간이 초과되었습니다. 다시 연결해 주세요.".into());
+            return Err("ChatGPT 로그인 시간이 초과되었습니다. 브라우저에 권한·플랜 안내가 표시됐다면 해당 내용을 확인해 주세요. 다른 계정·워크스페이스를 선택하려면 설정의 별도 연결 버튼을 사용하세요.".into());
         }
         match listener.accept() {
             Ok((mut stream, peer)) => {
@@ -632,6 +656,21 @@ pub(super) fn revoke(client_id: &str, token: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn denied_authorization_preserves_safe_reason_and_checks_state_first() {
+        let denied = "GET /auth/callback?state=expected&error=subscription_sharing_user_not_eligible&error_description=PRIVATE_TOKEN HTTP/1.1\r\n\r\n";
+        let error = parse_callback(denied, "expected", None).unwrap_err();
+        assert!(error.contains("subscription_sharing_user_not_eligible"));
+        assert!(error.contains("반복하지"));
+        assert!(!error.contains("PRIVATE_TOKEN"));
+        assert!(
+            parse_callback(denied, "different", None)
+                .unwrap_err()
+                .contains("상태가 일치하지")
+        );
+        assert!(!authorization_error("PRIVATE_TOKEN").contains("PRIVATE_TOKEN"));
+        assert!(authorization_error("invalid_scope").contains("앱의 권한 설정"));
+    }
     // This generated key signs test tokens only; it is not an app credential.
     fn signed(claims: &Value) -> String {
         let mut header = jsonwebtoken::Header::new(Algorithm::RS256);

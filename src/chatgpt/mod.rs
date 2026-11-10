@@ -105,11 +105,13 @@ pub(crate) struct Status {
     accounts: Vec<AccountInfo>,
     active: Option<String>,
     model: &'static str,
+    pending_registration: bool,
 }
 fn status(accounts: &storage::Accounts) -> Status {
     Status {
         active: accounts.active.clone(),
         model: MODEL,
+        pending_registration: accounts.pending_client_id.is_some(),
         accounts: accounts
             .accounts
             .iter()
@@ -129,9 +131,59 @@ fn has_plan(scopes: &str) -> bool {
         .any(|s| s == "chatgpt.tokens.use.direct")
 }
 
+fn pending_registration(
+    accounts: &storage::Accounts,
+    selected: Option<&str>,
+    new_registration: bool,
+) -> Result<Option<String>, String> {
+    if selected.is_some() && new_registration {
+        return Err("저장된 계정 재연결과 새 계정 등록을 동시에 요청할 수 없습니다".into());
+    }
+    // An issued client is workspace-bound. Only an explicit new-registration
+    // action may bypass a pending client and offer workspace selection again.
+    Ok(if new_registration || selected.is_some() {
+        None
+    } else {
+        accounts.pending_client_id.clone()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn workspace_change_is_explicit_and_preserves_saved_accounts() {
+        let accounts = storage::Accounts {
+            pending_client_id: Some("oaiapp_pending".into()),
+            active: Some("oaiapp_active".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            pending_registration(&accounts, None, false)
+                .unwrap()
+                .as_deref(),
+            Some("oaiapp_pending")
+        );
+        assert!(
+            pending_registration(&accounts, None, true)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            pending_registration(&accounts, Some("oaiapp_active"), false)
+                .unwrap()
+                .is_none()
+        );
+        assert!(pending_registration(&accounts, Some("oaiapp_active"), true).is_err());
+        assert_eq!(accounts.active.as_deref(), Some("oaiapp_active"));
+        assert_eq!(
+            accounts.pending_client_id.as_deref(),
+            Some("oaiapp_pending")
+        );
+        let info = serde_json::to_value(status(&accounts)).unwrap();
+        assert_eq!(info["pending_registration"], true);
+        assert!(!info.to_string().contains("oaiapp_pending"));
+    }
     #[test]
     fn tasks_serialize_across_instances_and_cancel_only_the_owner() {
         let dir = std::env::temp_dir().join(format!("niki-chatgpt-lock-{}", uuid::Uuid::new_v4()));
@@ -191,6 +243,7 @@ pub(crate) async fn chatgpt_connect(
     tasks: State<'_, Tasks>,
     request_id: String,
     client_id: Option<String>,
+    new_registration: Option<bool>,
 ) -> Result<Status, String> {
     ensure_unlocked(&state)?;
     let operation = tasks.start(&state.data_dir, &request_id)?;
@@ -209,7 +262,11 @@ pub(crate) async fn chatgpt_connect(
             None => None,
         };
         let host = storage::host_id(&dir)?;
-        let pending = accounts.pending_client_id.clone();
+        let pending = pending_registration(
+            &accounts,
+            client_id.as_deref(),
+            new_registration.unwrap_or(false),
+        )?;
         let account = auth::connect(
             &client()?,
             &host,

@@ -15,7 +15,7 @@ const fs = require('node:fs');
       window.calls = [];
       const entry = id => ({ id, journal_id: 'j', title: `일기 ${id}`, body: `오늘 ${id} 산책을 했다.`, date: '2026-11-10', created_at: 'v1', updated_at: 'v1', tags: [], favorite: false, attachments: [], location: '', weather: '', deleted_at: null });
       window.sample = { locked: false, app_version: '0.1.4', nickname: '', updater_config: {}, journals: [{ id: 'j', name: '일기장', color: '#576b61' }], entries: [entry('a'), entry('b')], templates: [], sync_conflicts: [], pending_resolution_count: 0, synced_entry_ids: [], sync_status: {} };
-      window.connection = { accounts: [], active: null, model: 'gpt-6-luna' };
+      window.connection = { accounts: [], active: null, model: 'gpt-6-luna', pending_registration: true };
       window.holdSummary = false; window.holdLogin = false; window.summaryError = ''; window.failSave = false;
       window.__TAURI__ = { core: { invoke: async (name, args) => {
         calls.push({ name, args });
@@ -27,7 +27,7 @@ const fs = require('node:fs');
           const id = args.clientId || `oaiapp_${connection.accounts.length + 1}`;
           let account = connection.accounts.find(a => a.client_id === id);
           if (!account) { account = { client_id: id, email: 'person@example.invalid', welcome_seen: false }; connection.accounts.push(account); }
-          Object.assign(account, { connected: true, plan_enabled: true }); connection.active = id;
+          Object.assign(account, { connected: true, plan_enabled: true }); connection.active = id; connection.pending_registration = false;
           return structuredClone(connection);
         }
         if (name === 'chatgpt_acknowledge') { connection.accounts.find(a => a.client_id === connection.active).welcome_seen = true; return; }
@@ -68,11 +68,13 @@ const fs = require('node:fs');
     assert.equal(await page.locator('[data-oai-siwc-button]').evaluate(e => getComputedStyle(e).backgroundColor), 'rgb(17, 17, 17)');
     await page.evaluate(() => { holdLogin = true; });
     await action('chatgpt-connect').click();
+    assert.equal(await page.evaluate(() => calls.filter(c => c.name === 'chatgpt_connect').at(-1).args.newRegistration), false, 'Normal retries retain the pending registration');
     await action('chatgpt-cancel-login').click();
     await page.waitForFunction(() => calls.some(c => c.name === 'chatgpt_cancel'));
     await page.getByRole('alert').filter({ hasText: '취소' }).waitFor();
     await page.evaluate(() => { holdLogin = false; });
-    await action('chatgpt-connect').click();
+    await action('chatgpt-add-account').click();
+    assert.deepEqual(await page.evaluate(() => { const a = calls.filter(c => c.name === 'chatgpt_connect').at(-1).args; return {clientId:a.clientId,newRegistration:a.newRegistration}; }), {clientId:null,newRegistration:true});
     await action('chatgpt-welcome-ok').click();
     await page.waitForFunction(() => connection.accounts[0].welcome_seen);
     await action('chatgpt-add-account').click();
@@ -131,7 +133,8 @@ const fs = require('node:fs');
       assert.equal(overflow, 0, `Editor overflows at ${width}px`);
     }
     await action('settings').click();
-    await page.evaluate(() => { location.hash = '#/settings/chatgpt'; });
+    await page.locator('#settings-detail').waitFor();
+    await page.locator('[data-action="settings-tab"]').filter({ hasText: 'ChatGPT 연결' }).click();
     await action('chatgpt-disconnect').click();
     await page.getByText('이 기기에서 로그아웃했습니다.', { exact: false }).waitFor();
     await action('chatgpt-connect').click();
