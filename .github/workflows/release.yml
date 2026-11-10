@@ -2,31 +2,37 @@ name: Build and Release Niki
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
     inputs:
       tag:
         description: '배포할 버전 태그 (예: v0.1.0, v0.1.1)'
-        required: true
-        default: 'v0.1.0'
+        required: false
+        default: ''
+      publish:
+        description: '검증 후 GitHub Release에 게시 (태그 입력 필수)'
+        type: boolean
+        required: false
+        default: false
       notes:
         description: '업데이트 안내 문구 (릴리스 노트)'
         required: false
         default: 'Niki 업데이트 배포'
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
 
 jobs:
-  build-windows:
-    name: Build Windows (x86_64)
+  test:
+    name: Test UI, installer, storage and sync
     runs-on: windows-latest
-    outputs:
-      tag: ${{ steps.prep.outputs.tag }}
-      version: ${{ steps.prep.outputs.version }}
-      notes: ${{ steps.prep.outputs.notes }}
-      win_sha256: ${{ steps.build.outputs.sha256 }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -66,14 +72,39 @@ jobs:
 
       - name: Cache Cargo registry and target
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-tests
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test storage, migration and sync
         shell: pwsh
         run: |
-          cargo test
+          cargo test --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test -- --ignored
+          cargo test --locked -- --ignored
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  build-windows:
+    name: Build Windows (x86_64)
+    runs-on: windows-latest
+    outputs:
+      tag: ${{ steps.prep.outputs.tag }}
+      version: ${{ steps.prep.outputs.version }}
+      notes: ${{ steps.prep.outputs.notes }}
+      win_sha256: ${{ steps.build.outputs.sha256 }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Restore before changing the app version, so main and tags use the same key.
+      - name: Cache Cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Prepare version and OAuth config
         id: prep
@@ -82,16 +113,24 @@ jobs:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           INPUT_NOTES: ${{ github.event.inputs.notes }}
           REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          PUBLISH: ${{ inputs.publish }}
           CLIENT_ID: ${{ secrets.NIKI_GOOGLE_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.NIKI_GOOGLE_CLIENT_SECRET }}
         run: |
-          $tag = if ($env:INPUT_TAG) { $env:INPUT_TAG.Trim() } else { $env:REF_NAME.Trim() }
+          if ($env:PUBLISH -eq 'true' -and [string]::IsNullOrWhiteSpace($env:INPUT_TAG)) { throw 'A tag is required to publish a release.' }
+          $currentVersion = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
+          $tag = if ($env:INPUT_TAG) { $env:INPUT_TAG.Trim() } elseif ($env:REF_TYPE -eq 'tag') { $env:REF_NAME.Trim() } else { "v$currentVersion" }
           if (-not $tag.StartsWith("v")) { $tag = "v$tag" }
           $version = $tag.TrimStart("v", "V")
           $notes = if ($env:INPUT_NOTES) { $env:INPUT_NOTES } else { "Niki v$version 업데이트" }
 
           (Get-Content Cargo.toml -Raw) -replace '(?m)^version\s*=\s*"[^"]+"', "version = `"$version`"" | Set-Content Cargo.toml -Encoding UTF8
           (Get-Content tauri.conf.json -Raw) -replace '"version":\s*"[^"]+"', "`"version`": `"$version`"" | Set-Content tauri.conf.json -Encoding UTF8
+
+          # Refresh only workspace versions; retain the locked dependency versions.
+          cargo update --workspace
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           if ($env:CLIENT_ID) {
             $json = @{
@@ -111,8 +150,8 @@ jobs:
         id: build
         shell: pwsh
         run: |
-          Remove-Item Cargo.lock -Force -ErrorAction SilentlyContinue
-          cargo build --release
+          cargo build --release --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item -Force "target/release/niki_journal.exe" "target/release/Niki_Setup.exe"
           $sha256 = (Get-FileHash -Path "target/release/Niki_Setup.exe" -Algorithm SHA256).Hash.ToLower()
           "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
@@ -139,17 +178,30 @@ jobs:
 
       - name: Cache Cargo registry and target
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-universal-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Prepare version and OAuth config
         shell: bash
         env:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          PUBLISH: ${{ inputs.publish }}
           CLIENT_ID: ${{ secrets.NIKI_GOOGLE_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.NIKI_GOOGLE_CLIENT_SECRET }}
         run: |
           set -euo pipefail
-          TAG="${INPUT_TAG:-$REF_NAME}"
+          if [[ "${PUBLISH:-}" == "true" && -z "${INPUT_TAG//[[:space:]]/}" ]]; then
+            echo "A tag is required to publish a release." >&2
+            exit 1
+          fi
+          CURRENT_VERSION="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)"/\1/p' Cargo.toml | head -n1)"
+          TAG="${INPUT_TAG:-}"
+          if [[ -z "$TAG" ]]; then
+            if [[ "$REF_TYPE" == "tag" ]]; then TAG="$REF_NAME"; else TAG="v$CURRENT_VERSION"; fi
+          fi
           TAG="$(echo "$TAG" | xargs)"
           [[ "$TAG" == v* ]] || TAG="v$TAG"
           VERSION="${TAG#v}"
@@ -157,6 +209,9 @@ jobs:
 
           sed -i '' -E "s/^version[[:space:]]*=[[:space:]]*\"[^\"]+\"/version = \"${VERSION}\"/" Cargo.toml
           sed -i '' -E "s/\"version\":[[:space:]]*\"[^\"]+\"/\"version\": \"${VERSION}\"/" tauri.conf.json
+
+          # Refresh only workspace versions; retain the locked dependency versions.
+          cargo update --workspace
 
           if [ -n "${CLIENT_ID:-}" ]; then
             cat > oauth-client.json <<EOF
@@ -174,7 +229,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f Cargo.lock
           chmod +x scripts/build-macos.sh
           ./scripts/build-macos.sh --universal
           SHA256="$(shasum -a 256 target/release/Niki_macOS.dmg | awk '{print $1}')"
@@ -188,8 +242,11 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    needs: [build-windows, build-macos]
+    needs: [test, build-windows, build-macos]
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.publish)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Download release artifacts
         uses: actions/download-artifact@v8

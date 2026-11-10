@@ -12,14 +12,14 @@ mkdir -p target/release
 
 if [[ "${1:-}" == "--universal" ]]; then
   echo "==> Building macOS Universal binary (aarch64-apple-darwin + x86_64-apple-darwin)..."
-  cargo build --release --target aarch64-apple-darwin
-  cargo build --release --target x86_64-apple-darwin
+  cargo build --release --locked --target aarch64-apple-darwin
+  cargo build --release --locked --target x86_64-apple-darwin
   lipo -create -output target/release/niki_journal \
     target/aarch64-apple-darwin/release/niki_journal \
     target/x86_64-apple-darwin/release/niki_journal
 else
   echo "==> Building macOS native release binary..."
-  cargo build --release
+  cargo build --release --locked
 fi
 
 echo "==> Packaging ${APP_DIR}..."
