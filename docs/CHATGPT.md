@@ -1,0 +1,37 @@
+# ChatGPT 구독으로 일기 요약
+
+설정 → **ChatGPT 연결** → **Continue with ChatGPT**를 선택합니다. 시스템 브라우저에서 로그인하고 Niki가 ChatGPT 구독을 사용하도록 허용합니다. API 키 입력은 필요하지 않습니다. 연결한 계정에서 `gpt-6-luna`가 제공되는지 요청 전에 확인하며, 제공되지 않으면 다른 모델로 바꾸지 않고 안내합니다.
+
+일기를 연 뒤 **일기 요약** → **이 일기 요약하기**를 선택합니다. 최신 편집 내용을 먼저 저장하고 해당 버전을 확인합니다. 선택한 일기 한 편의 제목·날짜·본문만 OpenAI로 전송합니다. 첨부 파일의 바이너리 내용, 다른 일기, 장소·날씨·태그 필드는 전송하지 않습니다. 본문에 작성한 정보와 이미지 참조 문자열은 본문에 포함됩니다.
+
+결과는 창 안에서 확인하거나 복사할 수 있습니다. 원본을 수정하거나 결과를 자동 저장하지 않습니다. 창을 닫거나 다른 일기로 이동하면 결과가 사라집니다. 취소 전 이미 처리된 요청은 사용량에 포함될 수 있습니다.
+
+## 사용량과 계정
+
+ChatGPT 채팅의 무료·무제한 조건이 외부 앱 호출에 그대로 적용되지는 않습니다. Niki의 요약은 연결한 ChatGPT 구독의 Work·Codex 사용량을 공유하며 구독·앱별 제한을 따릅니다. Niki는 별도 AI 사용료를 청구하지 않습니다. **사용량 관리**는 [ChatGPT 사용량 설정](https://chatgpt.com/settings/usage)을 엽니다. 앱 한도와 추가 크레딧 허용 여부는 그곳에서 확인합니다.
+
+여러 계정을 따로 연결할 수 있습니다. 이메일이 같아도 등록별 계정 번호와 클라이언트 ID를 구분합니다. 로그아웃 후 다시 연결할 때 등록된 클라이언트와 기기 식별자를 재사용합니다. 다른 기기에서는 별도로 연결합니다.
+
+## 인증과 로컬 저장
+
+- 공식 동적 클라이언트 등록, Authorization Code + PKCE(S256)를 사용합니다. Codex의 클라이언트 ID나 기존 인증 파일을 가져오지 않습니다.
+- 콜백은 임의 포트의 `http://127.0.0.1:<port>/auth/callback`에만 바인딩합니다. 로그인별 state·nonce를 생성하고 중복 매개변수 및 다른 계정의 응답을 거부합니다.
+- ID 토큰의 RS256 서명, 공식 JWKS, issuer, audience, 유효기간, subject, nonce를 검증합니다. 토큰에 지정된 임의 키 URL은 사용하지 않습니다.
+- 액세스·갱신·ID 토큰은 앱 데이터 폴더의 `chatgpt-credentials.enc`에 AES-256-GCM으로 저장합니다. 암호화 키는 Windows 자격 증명 관리자 또는 macOS Keychain에 저장합니다. 평문 대체 저장은 하지 않습니다.
+- 토큰은 프런트엔드, 일기 데이터, 일기 백업, Google Drive 동기화, 로그에 포함하지 않습니다. 비밀이 아닌 기기 식별자만 `chatgpt-host-id`에 별도로 유지합니다.
+- 프로세스 내 작업 잠금과 파일 잠금으로 동일 기기의 토큰 갱신 경쟁을 방지합니다. 갱신 토큰 교체를 저장한 후 추론을 요청합니다. 확정된 인증 무효화나 검증할 수 없는 교체 토큰은 재로그인을 요구하고, 갱신 전의 일시적 통신 오류는 저장된 인증을 유지합니다.
+- 연결 해제 시 공식 revocation endpoint를 호출합니다. 일시적 실패는 제한적으로 재시도하고, 원격 해제를 확인하지 못하면 로컬 토큰을 지운 뒤 사용자에게 별도 안내합니다.
+- Responses 요청에는 `store: false`를 사용합니다. 이는 모든 제공자 측 보관이 없다는 의미가 아니며 OpenAI의 서비스 정책이 적용됩니다.
+
+## 검증
+
+`cargo test --locked`로 서명된 JWT·PKCE·콜백·토큰 교체·암호화 저장·동시 실행·응답 완료 확인을 검증합니다. `npm test`는 연결/취소/계정 전환, 전송 전 확인, 저장 실패, 사용량 오류, 원본 유지, 취소 후 결과 폐기와 작은 창 배치를 검증합니다. 브라우저 테스트는 Tauri 명령을 모의하며 실제 계정 접근 가능 여부를 대신 검증하지 않습니다.
+
+실제 연결 테스트는 별도 `NIKI_JOURNAL_DATA_DIR`와 `sync_paused: true`가 지정된 예시 데이터로 진행합니다. 기존 Google 자격 증명은 OS에 있으므로 데이터 경로 분리만으로 동기화가 비활성화되지는 않습니다. 실제 일기 대신 예시 일기로 로그인 → 요약 → 재실행 → 연결 해제를 확인합니다. 실제 인증과 구독 사용 허용은 사용자가 브라우저에서 수행합니다.
+
+## 공식 사양
+
+- [OpenAI 로그인 및 동적 등록](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
+- [계정·세션 및 토큰 갱신](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)
+- [지원 모델 및 추론](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
+- [오류 및 복구](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery)

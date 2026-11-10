@@ -16,6 +16,7 @@ mod sync_media;
 mod sync_merge;
 #[path = "archive/zip_read.rs"]
 mod zip_read;
+mod chatgpt;
 
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
@@ -963,10 +964,11 @@ fn unlock(state: State<'_, AppState>, password: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn lock(state: State<'_, AppState>) -> Result<(), String> {
+fn lock(state: State<'_, AppState>, chatgpt_tasks: State<'_, chatgpt::Tasks>) -> Result<(), String> {
     let store = state.store.lock().map_err(err)?;
     if store.password_hash.is_some() {
         state.unlocked.store(false, Ordering::SeqCst);
+        chatgpt_tasks.cancel(None);
     }
     Ok(())
 }
@@ -1987,6 +1989,7 @@ pub fn run() {
         app_installer::StartupMode::NormalApp => {}
     }
     tauri::Builder::default()
+        .manage(chatgpt::Tasks::default())
         .setup(|app| {
             let data_dir = match std::env::var_os("NIKI_JOURNAL_DATA_DIR") {
                 Some(path) => PathBuf::from(path),
@@ -2043,6 +2046,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            chatgpt::chatgpt_status,
+            chatgpt::chatgpt_connect,
+            chatgpt::chatgpt_cancel,
+            chatgpt::chatgpt_select_account,
+            chatgpt::chatgpt_acknowledge,
+            chatgpt::chatgpt_disconnect,
+            chatgpt::chatgpt_open_usage,
+            chatgpt::chatgpt_summarize,
             bootstrap,
             unlock,
             lock,

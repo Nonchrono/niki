@@ -83,6 +83,7 @@ cargo run
 - 타임라인·달력·미디어·이날의 일기, 키워드 및 태그 검색
 - 사진·영상·오디오·PDF 첨부와 미리보기, Tiptap 편집기에서 커서 위치에 이미지 삽입
 - 사용자 템플릿, 앱 화면 잠금
+- ChatGPT OAuth 연결 및 GPT-6 Luna로 선택한 일기 요약 (사용자 구독 사용량 적용)
 - JSON/ZIP 가져오기, 첨부를 포함한 자체 JSON 백업
 - 인쇄 대화상자를 통한 PDF 저장
 - Google Drive(`appDataFolder`) AES-256-GCM 암호화 동기화 및 Google Drive 내 키 자동 보관, 3-way 병합 및 충돌 해결
@@ -92,6 +93,7 @@ cargo run
 
 - [Google Drive 동기화 설계](docs/GOOGLE_DRIVE_DESIGN.md)
 - [Google OAuth 설정 안내](docs/GOOGLE_OAUTH_SETUP.md)
+- [ChatGPT 연결 및 일기 요약](docs/CHATGPT.md)
 - [보안 재검토](docs/SECURITY_REVIEW.md)
 
 ## 검증

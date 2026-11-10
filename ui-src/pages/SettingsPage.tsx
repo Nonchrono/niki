@@ -1,6 +1,7 @@
 import { useRef, useState, type ChangeEvent } from 'react';
 import { useParams } from 'react-router-dom';
-import { ArrowDownUp, Cloud, Info, LayoutTemplate, LockKeyhole, Plus, Smile } from 'lucide-react';
+import { ArrowDownUp, Cloud, Info, LayoutTemplate, LockKeyhole, Plus, Smile, Sparkles } from 'lucide-react';
+import { ChatGPTSettings } from '../chatgpt/ChatGPTSettings';
 import { useApp } from '../app/AppContext';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -14,6 +15,7 @@ type SettingsProps = { data: Snapshot };
 const tabs = [
   { id: 'profile', title: '별명 설정', icon: Smile },
   { id: 'sync', title: 'Google Drive 동기화', icon: Cloud },
+  { id: 'chatgpt', title: 'ChatGPT 연결', icon: Sparkles },
   { id: 'backup', title: '가져오기와 백업', icon: ArrowDownUp },
   { id: 'templates', title: '템플릿', icon: LayoutTemplate },
   { id: 'lock', title: '앱 잠금', icon: LockKeyhole },
@@ -24,11 +26,12 @@ export function SettingsPage() {
   const descriptions: Record<string, string> = {
     profile: data.nickname?.trim() ? `현재 별명: ${data.nickname.trim()}` : '현재 별명: 안녕하세요!',
     sync: data.sync_status.connected ? accountLabel(data.sync_status) : 'Google 로그인 가능',
+    chatgpt: '내 ChatGPT 구독으로 일기 요약',
     backup: '가져오기 및 백업 파일 관리', templates: `저장된 서식 ${data.templates.length}개`,
     lock: data.lock_enabled ? '화면 잠금 사용 중' : '화면 잠금 해제됨',
     about: `v${data.app_version}${update?.update_available ? ` · v${update.latest_version} 업데이트 가능` : ' · 자동 업데이트 관리'}`,
   };
-  return <><section className="list-pane"><div className="list-head"><h2>설정 목록</h2><div className="subtle">항목을 선택하세요</div></div><div className="entry-list">{tabs.map(item => <button key={item.id} className={`entry-card ${tab === item.id ? 'active' : ''}`} data-action="settings-tab" onClick={() => void go(`/settings/${item.id}`)}><h3 className="flex items-center gap-2"><item.icon size={15} aria-hidden="true" />{item.title}</h3><p>{descriptions[item.id]}</p></button>)}</div></section><section className="wide-view" id="settings-detail">{tab === 'profile' ? <ProfileSettings data={data} /> : tab === 'backup' ? <BackupSettings /> : tab === 'templates' ? <TemplateSettings data={data} /> : tab === 'lock' ? <LockSettings data={data} /> : tab === 'about' ? <AboutSettings data={data} /> : <SyncSettings data={data} />}</section></>;
+  return <><section className="list-pane"><div className="list-head"><h2>설정 목록</h2><div className="subtle">항목을 선택하세요</div></div><div className="entry-list">{tabs.map(item => <button key={item.id} className={`entry-card ${tab === item.id ? 'active' : ''}`} data-action="settings-tab" onClick={() => void go(`/settings/${item.id}`)}><h3 className="flex items-center gap-2"><item.icon size={15} aria-hidden="true" />{item.title}</h3><p>{descriptions[item.id]}</p></button>)}</div></section><section className="wide-view" id="settings-detail">{tab === 'chatgpt' ? <ChatGPTSettings /> : tab === 'profile' ? <ProfileSettings data={data} /> : tab === 'backup' ? <BackupSettings /> : tab === 'templates' ? <TemplateSettings data={data} /> : tab === 'lock' ? <LockSettings data={data} /> : tab === 'about' ? <AboutSettings data={data} /> : <SyncSettings data={data} />}</section></>;
 }
 function ProfileSettings({ data }: SettingsProps) {
   const { run, refresh, action, toast } = useApp(); const [nickname, setNickname] = useState(data.nickname || '');
@@ -60,5 +63,5 @@ function AboutSettings({ data }: SettingsProps) {
   const { run, refresh, action, toast, update, setUpdate } = useApp();
   const isMac = /Mac/i.test(navigator.platform || navigator.userAgent || '');
   const installLabel = data.installed_on_pc ? isMac ? 'Applications 설치본 갱신' : 'PC 설치 위치·바로가기 변경' : isMac ? '이 Mac에 설치하기 (/Applications 등록)' : '이 PC에 설치하기 (위치·바로가기 선택)';
-  return <><div className="wide-head"><h2>앱 정보</h2></div><div className="panel-card settings-card"><h3>Niki v{data.app_version}</h3><p>구독과 광고 없이 로컬에서 사용하며, 선택 시 사용자의 Google Drive(<code>appDataFolder</code>)를 통해 암호화 동기화를 지원합니다. 동기화 키는 같은 Google Drive 계정에 보관됩니다.</p><div className="panel-actions"><Button variant="outline" className="ghost" data-action="updater-check-now" onClick={() => void action(async () => { toast('업데이트 확인 중…'); const info = await run<UpdateInfo>('updater_check'); setUpdate(info); toast(info.update_available ? `새 버전(v${info.latest_version}) 업데이트가 있습니다!` : `현재 최신 버전(v${info.current_version})을 사용 중입니다`); })}>지금 업데이트 확인</Button>{update?.update_available && <Button className="primary" data-action="updater-install" onClick={() => void action(async () => { toast('새 버전 다운로드 및 검증 중…'); const version = await run<string>('updater_install'); toast(`v${version} 업데이트 완료! 앱을 재시작합니다…`); })}>v{update.latest_version} 다운로드 및 재시작</Button>}<Button variant="outline" className="ghost" data-action="install-to-pc" onClick={() => void action(async () => { const path = await run<string>('install_app_to_pc'); await refresh(); toast(`설치 완료: ${path}`); })}>{installLabel}</Button></div></div></>;
+  return <><div className="wide-head"><h2>앱 정보</h2></div><div className="panel-card settings-card"><h3>Niki v{data.app_version}</h3><p>기본 일기 기능은 구독과 광고 없이 로컬에서 사용합니다. 선택 기능인 AI 요약은 사용자의 ChatGPT 구독을 사용하며, 사용자의 Google Drive(<code>appDataFolder</code>)를 통해 암호화 동기화를 지원합니다. 동기화 키는 같은 Google Drive 계정에 보관됩니다.</p><div className="panel-actions"><Button variant="outline" className="ghost" data-action="updater-check-now" onClick={() => void action(async () => { toast('업데이트 확인 중…'); const info = await run<UpdateInfo>('updater_check'); setUpdate(info); toast(info.update_available ? `새 버전(v${info.latest_version}) 업데이트가 있습니다!` : `현재 최신 버전(v${info.current_version})을 사용 중입니다`); })}>지금 업데이트 확인</Button>{update?.update_available && <Button className="primary" data-action="updater-install" onClick={() => void action(async () => { toast('새 버전 다운로드 및 검증 중…'); const version = await run<string>('updater_install'); toast(`v${version} 업데이트 완료! 앱을 재시작합니다…`); })}>v{update.latest_version} 다운로드 및 재시작</Button>}<Button variant="outline" className="ghost" data-action="install-to-pc" onClick={() => void action(async () => { const path = await run<string>('install_app_to_pc'); await refresh(); toast(`설치 완료: ${path}`); })}>{installLabel}</Button></div></div></>;
 }
