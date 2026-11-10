@@ -8,7 +8,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && node scripts/build-ui.cjs && node scripts/editor-licenses.cjs",
-    "test": "node tests/editor.test.cjs && node tests/auto-sync.test.cjs && node tests/navigation.test.cjs && node tests/holidays.test.cjs && node tests/calendar.test.cjs && node tests/chatgpt.test.cjs"
+    "test": "node tests/editor.test.cjs && node tests/auto-sync.test.cjs && node tests/navigation.test.cjs && node tests/holidays.test.cjs && node tests/calendar.test.cjs"
   },
   "repository": {
     "type": "git",

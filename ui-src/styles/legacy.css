@@ -22,19 +22,3 @@ select:hover{border-color:#b5cbb8;background-color:#f8fbf7}select option{color:#
 .conflict-panel{border:1px solid #e3c9a6;background:#fff9ef;border-radius:14px;padding:16px;margin:0 0 22px;color:#5b4a2e}.conflict-head{display:flex;gap:10px;align-items:flex-start;color:#9a6a1f}.conflict-head strong{font-size:13px;color:#6b4a14}.conflict-head p{margin:4px 0 0;font-size:12px;line-height:1.6;color:#80683f}.conflict-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}.conflict-version{background:#fff;border:1px solid #eadcc4;border-radius:11px;padding:12px;min-width:0}.conflict-version h4{margin:0;font-size:12px;color:#6b4a14}.conflict-when{margin:2px 0 8px;font-size:10px;color:#a08b66}.conflict-title{margin:0 0 6px;font-size:13px;font-weight:700;color:#3b3322}.conflict-field{margin:0 0 6px;font-size:12px;color:#3b3322}.conflict-field span{display:inline-block;margin-right:6px;padding:1px 6px;border-radius:5px;background:#f6e6c6;font-size:10px;font-weight:700;color:#8a5d12}.conflict-body{max-height:200px;overflow-y:auto;white-space:pre-wrap;font-size:12px;line-height:1.7;color:#4a4636}.conflict-count{margin:6px 0 0;font-size:10px;color:#a08b66;text-align:right}.conflict-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}@media(max-width:760px){.conflict-grid{grid-template-columns:1fr}}
 
 .dialog-backdrop{position:fixed;inset:0;z-index:100;display:grid;place-items:center;background:#1c261f66}.dialog-card{width:min(420px,calc(100vw - 32px));background:#fff;border-radius:14px;padding:20px;box-shadow:0 18px 50px #1c261f40}.dialog-message{margin:0 0 14px;font-size:13px;line-height:1.7;color:#334238;white-space:pre-wrap}.dialog-input{width:100%;border:1px solid #dfe6dd;border-radius:8px;padding:9px 10px;font-size:13px;margin-bottom:14px;background:#fcfdfb;resize:vertical}.dialog-actions{display:flex;justify-content:flex-end;gap:8px}
-
-/* ChatGPT connection and explicitly requested diary summaries. */
-.editor-top{flex-wrap:wrap}.editor-top>*{max-width:100%}
-.chatgpt-dialog{position:fixed;inset:0;margin:auto;width:min(560px,calc(100vw - 48px));max-height:calc(100vh - 64px);overflow:auto;padding:28px;border:1px solid #d7dfd5;border-radius:18px;background:#fff;color:#263e30;box-shadow:0 20px 80px #132b2440}
-.chatgpt-dialog::backdrop{background:#12271d66}
-.chatgpt-dialog h2{margin:0 0 18px;font-size:20px;font-weight:700}
-.chatgpt-dialog p{margin:12px 0;line-height:1.7;overflow-wrap:anywhere}
-.chatgpt-dialog .panel-actions,.chatgpt-settings .panel-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:20px}
-.chatgpt-summary-title{font-weight:600}
-.chatgpt-summary-result{margin-top:20px;padding:20px;background:#f0f5ef;border:1px solid #dce6db;border-radius:12px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.85;font-size:14px}
-.chatgpt-error{color:#a34236!important;overflow-wrap:anywhere;white-space:pre-wrap}
-.chatgpt-connection{margin:18px 0;font-size:13px;font-weight:600}
-.chatgpt-account-label{display:flex;flex-direction:column;gap:8px;margin:20px 0;font-size:13px}
-.chatgpt-account-label select{max-width:100%}
-.chatgpt-summary-loading{padding:18px;background:#f5f7f2;border-radius:10px}
-@media print{.chatgpt-dialog{display:none!important}}

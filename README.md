@@ -64,14 +64,6 @@ cargo run
 
 빌드 완료 시 `target/release/Niki.app` 및 `target/release/Niki_macOS.dmg`가 생성됩니다. 앱 데이터는 각 운영체제의 사용자별 앱 데이터 폴더에 저장되며, 개발·테스트에서는 `NIKI_JOURNAL_DATA_DIR` 환경 변수로 저장 위치를 바꿀 수 있습니다.
 
-### CI와 릴리즈
-
-`main`에 푸시하면 테스트, Windows 설치 파일 빌드, macOS 유니버설 빌드를 병렬 실행합니다. 이 실행은 릴리즈를 게시하지 않으며, 다음 빌드와 릴리즈가 재사용할 Cargo 캐시를 저장합니다. 테스트와 각 플랫폼 빌드는 별도 캐시 키를 사용하고, 태그 실행은 기본 브랜치인 `main`의 캐시를 읽습니다.
-
-`Cargo.lock`은 삭제하지 않습니다. CI에서 앱 버전을 바꿀 때만 `cargo update --workspace`로 워크스페이스 버전을 반영하고, 테스트와 빌드는 `--locked`로 실행하여 의존성 버전을 유지합니다. 의존성을 변경할 때는 갱신된 `Cargo.lock`도 함께 커밋해야 합니다.
-
-`v*` 태그를 푸시하면 세 작업이 모두 성공한 뒤 GitHub Release를 게시합니다. Actions에서 수동 실행할 때는 기본적으로 검증만 진행하며, 게시하려면 `publish`를 선택하고 `tag`를 입력해야 합니다. 새 `main` 푸시는 진행 중인 이전 `main` 푸시 검증을 취소합니다.
-
 > **macOS 첫 실행 시 보안 경고가 나타나는 경우:**
 > Apple Developer 유료 인증서로 공증되지 않은 오픈소스 앱은 macOS Gatekeeper에 의해 첫 실행 시 차단될 수 있습니다. Finder의 **응용 프로그램** 폴더에서 `Niki.app`을 **Control 키를 누른 채 클릭(우클릭) > [열기]**를 누르거나, 터미널에서 `xattr -cr /Applications/Niki.app`을 실행하면 정상 실행됩니다.
 
@@ -83,7 +75,6 @@ cargo run
 - 타임라인·달력·미디어·이날의 일기, 키워드 및 태그 검색
 - 사진·영상·오디오·PDF 첨부와 미리보기, Tiptap 편집기에서 커서 위치에 이미지 삽입
 - 사용자 템플릿, 앱 화면 잠금
-- ChatGPT OAuth 연결 및 GPT-6 Luna로 선택한 일기 요약 (사용자 구독 사용량 적용)
 - JSON/ZIP 가져오기, 첨부를 포함한 자체 JSON 백업
 - 인쇄 대화상자를 통한 PDF 저장
 - Google Drive(`appDataFolder`) AES-256-GCM 암호화 동기화 및 Google Drive 내 키 자동 보관, 3-way 병합 및 충돌 해결
@@ -93,7 +84,6 @@ cargo run
 
 - [Google Drive 동기화 설계](docs/GOOGLE_DRIVE_DESIGN.md)
 - [Google OAuth 설정 안내](docs/GOOGLE_OAUTH_SETUP.md)
-- [ChatGPT 연결 및 일기 요약](docs/CHATGPT.md)
 - [보안 재검토](docs/SECURITY_REVIEW.md)
 
 ## 검증
