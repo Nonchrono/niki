@@ -49,6 +49,7 @@ const fs = require('node:fs');
         }
         if (name === 'codex_chat') {
           window.memoryLeftAtChat = window.memoryLeft;
+          window.refreshCallsAtChat = calls.filter(c => c.name === 'codex_refresh_memory').length;
           chatHistory.push({ id: `m${chatHistory.length}`, role: 'user', kind: 'chat', content: args.message });
           if (failChat) throw Error('연결을 확인하고 다시 시도해 주세요.');
           chatHistory.push({ id: `m${chatHistory.length}`, role: 'assistant', kind: 'chat', content: '산책 이야기를 이어가 볼까요?' });
@@ -161,8 +162,8 @@ const fs = require('node:fs');
     await page.waitForFunction(() => calls.filter(c => c.name === 'codex_chat').length >= 2);
     assert.ok(await page.evaluate(() => memoryLeftAtChat > 0), 'sending a message interrupts background memory building instead of waiting for it to finish');
     assert.ok(interruptBase >= 0);
-    const afterReply = await refreshCalls();
-    await page.waitForFunction(base => calls.filter(c => c.name === 'codex_refresh_memory').length > base, afterReply);
+    // Compared with the count taken inside the chat call, so a fast machine cannot finish early.
+    await page.waitForFunction(() => calls.filter(c => c.name === 'codex_refresh_memory').length > refreshCallsAtChat);
     assert.ok(true, 'memory building resumes after a reply');
     // The search model arrives automatically: no button, only progress while it downloads.
     assert.equal(await page.getByRole('button', { name: /검색 모델/ }).count(), 0, 'no download button');
