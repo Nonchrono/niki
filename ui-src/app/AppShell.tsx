@@ -37,8 +37,6 @@ function ShellContent() {
   const nickname = data.nickname?.trim();
   const active = data.entries.filter(entry => !entry.deleted_at);
   const timeline = location.pathname.startsWith('/all') || location.pathname.startsWith('/journals/');
-  const selectedEntryId = /\/entries\/([^/]+)$/.exec(location.pathname)?.[1];
-  const hasEditor = timeline && active.some(entry => entry.id === selectedEntryId);
   const title = timeline ? '' : location.pathname.startsWith('/settings') ? '설정'
     : location.pathname.startsWith('/calendar') ? '달력'
     : location.pathname.startsWith('/media') ? '미디어'
@@ -110,7 +108,6 @@ function ShellContent() {
     </aside>
     <main className="workspace">
       <header className="topbar"><div className="top-title">{title}</div><div className="top-spacer" />
-        {!hasEditor && <ChatToggle />}
         {data.sync_status.connected && <Button variant="outline" size="sm" data-action="drive-sync"
           title={accountLabel(data.sync_status)} disabled={syncing} onClick={() => void action(() => syncNow(true))}>
           <RefreshCw className={syncing ? 'animate-spin' : ''} />
@@ -131,7 +128,7 @@ function ShellContent() {
             })}>이 버전 건너뛰기</Button>
           </div>
         </div>}
-      <div className={`content${chat.open && chat.connected ? ' summary-visible' : ''}`} id="content"><Outlet />{chat.open && chat.connected && <SummaryPanel />}</div>
+      <div className="content" id="content"><Outlet />{chat.connected && <><ChatToggle /><SummaryPanel /></>}</div>
     </main>
     {journalMenu && <div className="menu-backdrop" onClick={() => setJournalMenu(null)}>
       <div className="context-menu journal-menu" style={{ left: journalMenu.x, top: journalMenu.y }} onClick={event => event.stopPropagation()}>

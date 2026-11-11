@@ -5,12 +5,12 @@ import { Input } from '../components/ui/input';
 import { useChat } from './ChatContext';
 
 export function SummaryPanel() {
-  const { close, messages, pending, busy, error, ready, draft, setDraft, send, summarize, target, reload } = useChat();
+  const { open, close, messages, pending, busy, error, ready, draft, setDraft, send, summarize, target, reload } = useChat();
   const conversation = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState('');
   const [copyError, setCopyError] = useState('');
   useEffect(() => { conversation.current?.scrollTo({ top: conversation.current.scrollHeight }); }, [messages, pending, busy, error]);
-  return <aside className="codex-summary" id="diary-summary-sidebar" aria-label="Niki와 대화">
+  return <aside className={`codex-summary${open ? ' open' : ''}`} id="diary-summary-sidebar" aria-label="Niki와 대화" aria-hidden={!open}>
     <div className="codex-summary-head">
       <div className="codex-summary-title"><h3>Niki와 대화</h3>
         <Button variant="outline" size="xs" data-action="codex-summarize" disabled={busy || !ready || !target || target.disabled}

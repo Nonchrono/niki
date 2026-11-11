@@ -2373,23 +2373,46 @@
     min-width: 0;
     overflow-y: auto;
   }
-  .summary-visible .editor-inner {
-    padding: 32px 24px 60px;
+  .content {
+    position: relative;
   }
-  .summary-visible .editor-top {
-    flex-wrap: wrap;
-  }
-  .summary-visible .editor-top .status {
-    flex-basis: 100%;
+  .codex-fab {
+    position: absolute;
+    right: 24px;
+    bottom: 24px;
+    z-index: 15;
+    width: 48px;
+    height: 48px;
+    border-radius: 999px;
+    box-shadow: 0 6px 18px #1c261f33;
   }
   .codex-summary {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
     display: flex;
     flex-direction: column;
-    flex: 0 0 290px;
+    width: min(435px, 100%);
     min-width: 0;
-    height: 100%;
     border-left: 1px solid #e0e7df;
     background: #f1f5ef;
+    box-shadow: none;
+    visibility: hidden;
+    transform: translateX(100%);
+    transition: transform .35s ease-in-out, box-shadow .35s ease-in-out, visibility 0s linear .35s;
+  }
+  .codex-summary.open {
+    visibility: visible;
+    transform: translateX(0);
+    box-shadow: -14px 0 32px #1c261f1f;
+    transition: transform .35s ease-in-out, box-shadow .35s ease-in-out, visibility 0s;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .codex-summary, .codex-summary.open {
+      transition: none;
+    }
   }
   .codex-summary-head {
     display: flex;
@@ -2490,14 +2513,6 @@
   .codex-login .subtle {
     overflow-wrap: anywhere;
   }
-  @media screen and (max-width: 1199px) {
-    .content.summary-visible > .list-pane {
-      display: none;
-    }
-    .codex-summary {
-      flex-basis: 280px;
-    }
-  }
   @media print {
     .codex-summary, [data-action="open-summary"] {
       display: none !important;
@@ -2506,9 +2521,6 @@
       display: block;
       height: auto;
       overflow: visible;
-    }
-    .summary-visible .editor-inner {
-      padding: 0;
     }
   }
 }

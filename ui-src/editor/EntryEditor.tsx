@@ -13,7 +13,6 @@ import { DatePicker } from './DatePicker';
 import { TiptapEditor, type TiptapEditorHandle } from './TiptapEditor';
 import { needsSourceEditor } from './markdown';
 import { useChat } from '../codex/ChatContext';
-import { ChatToggle } from '../codex/ChatToggle';
 
 type Fields = Pick<EntryInput, 'title' | 'date' | 'journalId' | 'favorite' | 'tags' | 'location' | 'weather'>;
 const fieldsFrom = (entry: Entry): Fields => ({ title: entry.title, date: entry.date, journalId: entry.journal_id, favorite: entry.favorite, tags: entry.tags, location: entry.location, weather: entry.weather });
@@ -177,7 +176,6 @@ export function EntryEditor({ entry }: { entry: Entry }) {
     <div className="editor-top">
       <span className="status" id="save-status">{status}{status === '모든 변경 사항 저장됨' && <span className="inline-flex items-center gap-1"> · <syncInfo.Icon size={12} />{syncInfo.label}</span>}</span>
       <span className="spacer" />
-      <ChatToggle />
       {conflict && <Button variant="outline" size="xs" data-action="save-draft-copy" onClick={copyDraft}>내 편집 내용 별도 저장</Button>}
       <Button variant="ghost" size="icon-sm" data-action="favorite-entry" title="즐겨찾기" aria-label="즐겨찾기" onClick={() => updateField('favorite', !fields.favorite)}>
         <Heart size={17} fill={fields.favorite ? 'currentColor' : 'none'} />
