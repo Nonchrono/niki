@@ -145,6 +145,7 @@ impl Default for Template {
 struct Store {
     version: u32,
     codex_conversation: Vec<codex::ChatMessage>,
+    codex_conversation_summary: Option<memory::ConversationSummary>,
     codex_entry_summaries: HashMap<String, memory::EntrySummary>,
     codex_month_summaries: HashMap<String, memory::MonthSummary>,
     nickname: String,
@@ -1590,6 +1591,7 @@ fn export_backup(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<St
     let mut store = state.store.lock().map_err(err)?.clone();
     store.password_hash = None;
     store.codex_conversation.clear();
+    store.codex_conversation_summary = None;
     store.codex_entry_summaries.clear();
     store.codex_month_summaries.clear();
     store.device_id.clear();

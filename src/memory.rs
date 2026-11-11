@@ -1,6 +1,7 @@
 //! Layered diary memory for Niki: cached summaries, local search and prompt assembly.
 //! Everything here is pure and local; only the assembled prompt ever leaves the device.
 use crate::Entry;
+use crate::codex::ChatMessage;
 use chrono::{Datelike, Duration, NaiveDate};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -13,6 +14,13 @@ pub struct EntrySummary {
     pub text: String,
 }
 
+/// Rolling summary of the oldest chat messages, up to and including `through_id`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ConversationSummary {
+    pub through_id: String,
+    pub text: String,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct MonthSummary {
     pub signature: String,
@@ -21,17 +29,37 @@ pub struct MonthSummary {
 
 /// Entries at most this long are their own summary and are never sent to be summarized.
 pub const SUMMARY_MIN_CHARS: usize = 300;
+// Budgets are in estimated tokens (see `est_tokens`), not bytes.
 const BATCH_ENTRIES: usize = 12;
-const BATCH_BYTES: usize = 30_000;
+const BATCH_TOKENS: usize = 9_000;
 const SUMMARY_INPUT_CHARS: usize = 3_000;
-const RECENT_BUDGET: usize = 30_000;
+const RECENT_BUDGET: usize = 10_000;
 const RECENT_MAX: usize = 14;
 const ENTRY_CAP_CHARS: usize = 3_000;
-const RELEVANT_BUDGET: usize = 24_000;
+const RELEVANT_BUDGET: usize = 8_000;
 const RELEVANT_MAX: usize = 6;
-const MONTH_BUDGET: usize = 16_000;
-const DIGEST_BUDGET: usize = 24_000;
+const MONTH_BUDGET: usize = 5_000;
+const DIGEST_BUDGET: usize = 7_000;
 const FALLBACK_EXCERPT_CHARS: usize = 160;
+const CONVO_SEND_TOKENS: usize = 8_000;
+const CONVO_KEEP_TOKENS: usize = 6_000;
+const CONVO_FOLD_TRIGGER_TOKENS: usize = 3_000;
+const CONVO_JOB_TOKENS: usize = 9_000;
+const CONVO_MESSAGE_CHARS: usize = 2_500;
+
+/// Rough token estimate without a tokenizer: about four ASCII characters per token and one
+/// token per other character (Hangul and CJK), which errs on the high side.
+pub fn est_tokens(text: &str) -> usize {
+    let (mut ascii, mut other) = (0usize, 0usize);
+    for c in text.chars() {
+        if c.is_ascii() {
+            ascii += 1;
+        } else {
+            other += 1;
+        }
+    }
+    ascii.div_ceil(4) + other
+}
 
 pub fn truncate_chars(text: &str, max: usize) -> String {
     match text.char_indices().nth(max) {
@@ -126,12 +154,10 @@ fn pending_months<'a>(
     out
 }
 
-pub fn pending_count(
-    entries: &[Entry],
-    entry_cache: &HashMap<String, EntrySummary>,
-    month_cache: &HashMap<String, MonthSummary>,
-) -> usize {
-    stale_entries(entries, entry_cache).len() + pending_months(entries, month_cache).len()
+pub fn pending_count(store: &crate::Store) -> usize {
+    stale_entries(&store.entries, &store.codex_entry_summaries).len()
+        + foldable_tokens(store).div_ceil(CONVO_JOB_TOKENS)
+        + pending_months(&store.entries, &store.codex_month_summaries).len()
 }
 
 /// Drops cached summaries whose diary or month no longer exists.
@@ -150,10 +176,72 @@ pub fn prune(
     month_cache.retain(|month, _| count.get(month.as_str()).copied().unwrap_or(0) >= 2);
 }
 
+fn msg_tokens(m: &ChatMessage) -> usize {
+    est_tokens(&m.content) + 4
+}
+
+/// The summary (only if the message it ends at still exists) and the messages after it.
+fn split_at_summary<'a>(
+    history: &'a [ChatMessage],
+    summary: &'a Option<ConversationSummary>,
+) -> (Option<&'a ConversationSummary>, &'a [ChatMessage]) {
+    if let Some(s) = summary {
+        if let Some(i) = history.iter().position(|m| m.id == s.through_id) {
+            return (Some(s), &history[i + 1..]);
+        }
+    }
+    (None, history)
+}
+
+/// Index from which messages stay verbatim; everything before it may be folded into the summary.
+fn fold_split(open: &[ChatMessage]) -> usize {
+    let (mut k, mut tokens) = (open.len(), 0usize);
+    while k > 0 {
+        let t = msg_tokens(&open[k - 1]);
+        if k < open.len() && tokens + t > CONVO_KEEP_TOKENS {
+            break;
+        }
+        tokens += t;
+        k -= 1;
+    }
+    k
+}
+
+fn foldable_tokens(store: &crate::Store) -> usize {
+    let (_, open) = split_at_summary(&store.codex_conversation, &store.codex_conversation_summary);
+    let total: usize = open[..fold_split(open)].iter().map(msg_tokens).sum();
+    if total > CONVO_FOLD_TRIGGER_TOKENS { total } else { 0 }
+}
+
+/// Conversation part of a prompt: the rolling summary of older messages plus the newest
+/// messages verbatim, bounded together with the message being sent (`reserve_tokens`).
+pub fn conversation_context(
+    store: &crate::Store,
+    reserve_tokens: usize,
+) -> (Option<String>, Vec<Value>) {
+    let (covered, open) =
+        split_at_summary(&store.codex_conversation, &store.codex_conversation_summary);
+    let mut tokens = reserve_tokens;
+    let mut recent: Vec<Value> = Vec::new();
+    for m in open.iter().rev() {
+        tokens += msg_tokens(m);
+        if tokens > CONVO_SEND_TOKENS {
+            break;
+        }
+        recent.push(json!({ "role": m.role, "content": m.content }));
+    }
+    recent.reverse();
+    (covered.map(|s| s.text.clone()), recent)
+}
+
 pub enum Job {
     Entries {
         prompt: String,
         sent: Vec<(String, String)>,
+    },
+    Conversation {
+        prompt: String,
+        through_id: String,
     },
     Month {
         month: String,
@@ -162,22 +250,24 @@ pub enum Job {
     },
 }
 
-/// The next piece of work: a batch of stale entries first, then one finished month.
-pub fn next_job(
-    entries: &[Entry],
-    entry_cache: &HashMap<String, EntrySummary>,
-    month_cache: &HashMap<String, MonthSummary>,
-) -> Option<Job> {
+/// The next piece of work: stale entries first, then folding old chat, then one finished month.
+pub fn next_job(store: &crate::Store) -> Option<Job> {
+    let (entries, entry_cache, month_cache) = (
+        &store.entries,
+        &store.codex_entry_summaries,
+        &store.codex_month_summaries,
+    );
     let stale = stale_entries(entries, entry_cache);
     if !stale.is_empty() {
-        let mut bytes = 0usize;
+        let mut tokens = 0usize;
         let mut batch: Vec<&Entry> = Vec::new();
         for e in stale {
-            let cost = e.title.len() + e.body.len().min(SUMMARY_INPUT_CHARS * 3);
-            if !batch.is_empty() && (batch.len() >= BATCH_ENTRIES || bytes + cost > BATCH_BYTES) {
+            let cost = est_tokens(&e.title)
+                + est_tokens(&truncate_chars(e.body.trim(), SUMMARY_INPUT_CHARS));
+            if !batch.is_empty() && (batch.len() >= BATCH_ENTRIES || tokens + cost > BATCH_TOKENS) {
                 break;
             }
-            bytes += cost;
+            tokens += cost;
             batch.push(e);
         }
         let items: Vec<Value> = batch
@@ -197,6 +287,31 @@ pub fn next_job(
             prompt: json!({ "entries": items }).to_string(),
             sent,
         });
+    }
+    if foldable_tokens(store) > 0 {
+        let (previous, open) =
+            split_at_summary(&store.codex_conversation, &store.codex_conversation_summary);
+        let mut tokens = 0usize;
+        let mut batch: Vec<&ChatMessage> = Vec::new();
+        for m in &open[..fold_split(open)] {
+            let cost = msg_tokens(m);
+            if !batch.is_empty() && tokens + cost > CONVO_JOB_TOKENS {
+                break;
+            }
+            tokens += cost;
+            batch.push(m);
+        }
+        let through_id = batch.last()?.id.clone();
+        let items: Vec<Value> = batch
+            .iter()
+            .map(|m| json!({ "role": m.role, "content": truncate_chars(&m.content, CONVO_MESSAGE_CHARS) }))
+            .collect();
+        let prompt = json!({
+            "previous_summary": previous.map_or("", |s| s.text.as_str()),
+            "messages": items
+        })
+        .to_string();
+        return Some(Job::Conversation { prompt, through_id });
     }
     let (month, list, sig) = pending_months(entries, month_cache).into_iter().next()?;
     let items: Vec<Value> = list
@@ -431,18 +546,17 @@ fn full_json(e: &Entry) -> Value {
 }
 
 fn full_cost(e: &Entry) -> usize {
-    e.title.len() + e.body.trim().len().min(ENTRY_CAP_CHARS * 3)
+    est_tokens(&e.title) + est_tokens(&truncate_chars(e.body.trim(), ENTRY_CAP_CHARS))
 }
 
 /// Layered context: monthly overviews and one-line notes for everything older, full text for
 /// entries matching the message, and full text for the most recent entries.
-pub fn diary_context(
-    entries: &[Entry],
-    entry_cache: &HashMap<String, EntrySummary>,
-    month_cache: &HashMap<String, MonthSummary>,
-    query: &str,
-    today: NaiveDate,
-) -> Value {
+pub fn diary_context(store: &crate::Store, query: &str, today: NaiveDate) -> Value {
+    let (entries, entry_cache, month_cache) = (
+        &store.entries,
+        &store.codex_entry_summaries,
+        &store.codex_month_summaries,
+    );
     let mut all = active(entries);
     all.sort_by(|a, b| {
         b.date
@@ -452,30 +566,30 @@ pub fn diary_context(
 
     let mut used: HashSet<&str> = HashSet::new();
     let mut recent: Vec<&Entry> = Vec::new();
-    let mut bytes = 0usize;
+    let mut tokens = 0usize;
     for e in all.iter().copied() {
         let cost = full_cost(e);
-        if recent.len() >= RECENT_MAX || (!recent.is_empty() && bytes + cost > RECENT_BUDGET) {
+        if recent.len() >= RECENT_MAX || (!recent.is_empty() && tokens + cost > RECENT_BUDGET) {
             break;
         }
-        bytes += cost;
+        tokens += cost;
         used.insert(e.id.as_str());
         recent.push(e);
     }
     recent.reverse();
 
     let mut relevant: Vec<&Entry> = Vec::new();
-    bytes = 0;
+    tokens = 0;
     for e in search(entries, query, today, RELEVANT_MAX + RECENT_MAX) {
         let cost = full_cost(e);
         if used.contains(e.id.as_str()) {
             continue;
         }
-        if relevant.len() >= RELEVANT_MAX || (!relevant.is_empty() && bytes + cost > RELEVANT_BUDGET)
+        if relevant.len() >= RELEVANT_MAX || (!relevant.is_empty() && tokens + cost > RELEVANT_BUDGET)
         {
             break;
         }
-        bytes += cost;
+        tokens += cost;
         used.insert(e.id.as_str());
         relevant.push(e);
     }
@@ -484,32 +598,32 @@ pub fn diary_context(
     let mut months: Vec<(&String, &MonthSummary)> = month_cache.iter().collect();
     months.sort_by(|a, b| b.0.cmp(a.0));
     let mut overview: Vec<Value> = Vec::new();
-    bytes = 0;
+    tokens = 0;
     for (month, summary) in months {
-        let cost = summary.text.len() + 16;
-        if bytes + cost > MONTH_BUDGET {
+        let cost = est_tokens(&summary.text) + 8;
+        if tokens + cost > MONTH_BUDGET {
             break;
         }
-        bytes += cost;
+        tokens += cost;
         overview.push(json!({ "month": month, "overview": summary.text }));
     }
     overview.reverse();
 
     let mut notes: Vec<Value> = Vec::new();
     let (mut omitted, mut full) = (0usize, false);
-    bytes = 0;
+    tokens = 0;
     for e in all.iter().copied() {
         if used.contains(e.id.as_str()) {
             continue;
         }
         let gist = digest(e, entry_cache);
-        let cost = e.title.len() + gist.len() + 24;
-        if full || bytes + cost > DIGEST_BUDGET {
+        let cost = est_tokens(&e.title) + est_tokens(&gist) + 8;
+        if full || tokens + cost > DIGEST_BUDGET {
             full = true;
             omitted += 1;
             continue;
         }
-        bytes += cost;
+        tokens += cost;
         notes.push(json!({ "date": e.date, "title": e.title, "gist": gist }));
     }
     notes.reverse();
@@ -532,6 +646,7 @@ pub fn diary_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codex::{MessageKind, Role};
 
     fn entry(id: u32, date: &str, title: &str, body: &str) -> Entry {
         serde_json::from_value(json!({
@@ -581,36 +696,83 @@ mod tests {
     #[test]
     fn summary_jobs_follow_staleness() {
         let long = "가".repeat(400);
-        let list = vec![
-            entry(1, "2026-09-01", "하나", &long),
-            entry(2, "2026-09-02", "둘", "짧은 일기"),
-            entry(3, "2026-09-03", "셋", &long),
-            entry(4, "2026-10-01", "넷", "짧은 일기"),
-        ];
-        let (mut ec, mut mc) = (HashMap::new(), HashMap::new());
-        assert_eq!(stale_entries(&list, &ec).len(), 2);
-        assert_eq!(pending_count(&list, &ec, &mc), 3); // 2 entries + September
-        let Some(Job::Entries { sent, .. }) = next_job(&list, &ec, &mc) else {
+        let mut store = crate::Store {
+            entries: vec![
+                entry(1, "2026-09-01", "하나", &long),
+                entry(2, "2026-09-02", "둘", "짧은 일기"),
+                entry(3, "2026-09-03", "셋", &long),
+                entry(4, "2026-10-01", "넷", "짧은 일기"),
+            ],
+            ..crate::Store::default()
+        };
+        assert_eq!(stale_entries(&store.entries, &store.codex_entry_summaries).len(), 2);
+        assert_eq!(pending_count(&store), 3); // 2 entries + September
+        let Some(Job::Entries { sent, .. }) = next_job(&store) else {
             panic!("entries first");
         };
         assert_eq!(sent.len(), 2);
         for (id, updated_at) in sent {
-            ec.insert(id, EntrySummary { updated_at, text: "요약".into() });
+            store.codex_entry_summaries.insert(id, EntrySummary { updated_at, text: "요약".into() });
         }
-        let Some(Job::Month { month, signature, .. }) = next_job(&list, &ec, &mc) else {
+        let Some(Job::Month { month, signature, .. }) = next_job(&store) else {
             panic!("month next");
         };
         assert_eq!(month, "2026-09");
-        mc.insert(month, MonthSummary { signature, text: "9월 개요".into() });
-        assert_eq!(pending_count(&list, &ec, &mc), 0);
-        assert!(next_job(&list, &ec, &mc).is_none());
-        let mut changed = list.clone();
-        changed[0].updated_at = "v2".into();
-        assert_eq!(pending_count(&changed, &ec, &mc), 2); // the entry and its month
-        changed.truncate(1);
-        prune(&changed, &mut ec, &mut mc);
-        assert_eq!(ec.len(), 1);
-        assert!(mc.is_empty());
+        store.codex_month_summaries.insert(month, MonthSummary { signature, text: "9월 개요".into() });
+        assert_eq!(pending_count(&store), 0);
+        assert!(next_job(&store).is_none());
+        let mut changed = store.clone();
+        changed.entries[0].updated_at = "v2".into();
+        assert_eq!(pending_count(&changed), 2); // the entry and its month
+        changed.entries.truncate(1);
+        prune(&changed.entries, &mut changed.codex_entry_summaries, &mut changed.codex_month_summaries);
+        assert_eq!(changed.codex_entry_summaries.len(), 1);
+        assert!(changed.codex_month_summaries.is_empty());
+    }
+
+    fn message(role: Role, text: &str) -> ChatMessage {
+        ChatMessage::new(role, text.to_owned(), MessageKind::Chat)
+    }
+
+    #[test]
+    fn token_estimate_counts_hangul_higher_than_ascii() {
+        assert_eq!(est_tokens(&"a".repeat(400)), 100);
+        assert_eq!(est_tokens(&"가".repeat(400)), 400);
+        assert_eq!(est_tokens(""), 0);
+    }
+
+    #[test]
+    fn long_conversations_fold_into_a_rolling_summary() {
+        let mut store = crate::Store::default();
+        for i in 0..40 {
+            let role = if i % 2 == 0 { Role::User } else { Role::Assistant };
+            store.codex_conversation.push(message(role, &"가".repeat(700)));
+        }
+        let Some(Job::Conversation { prompt, through_id }) = next_job(&store) else {
+            panic!("conversation folds once enough old messages pile up");
+        };
+        let sent: Value = serde_json::from_str(&prompt).unwrap();
+        let folded = sent["messages"].as_array().unwrap().len();
+        assert!(folded >= 1 && folded < 40);
+        assert_eq!(sent["previous_summary"], "");
+        assert_eq!(store.codex_conversation[folded - 1].id, through_id);
+        let before = pending_count(&store);
+        store.codex_conversation_summary =
+            Some(ConversationSummary { through_id: through_id.clone(), text: "지난 대화 요약".into() });
+        assert!(pending_count(&store) < before);
+        let (summary, recent) = conversation_context(&store, 10);
+        assert_eq!(summary.as_deref(), Some("지난 대화 요약"));
+        assert!(recent.len() < 40 - folded + 1);
+        let newest = &store.codex_conversation.last().unwrap().content;
+        assert_eq!(recent.last().unwrap()["content"], newest.as_str());
+        // A summary whose message vanished is ignored instead of sent stale.
+        store.codex_conversation_summary =
+            Some(ConversationSummary { through_id: "gone".into(), text: "stale".into() });
+        assert!(conversation_context(&store, 10).0.is_none());
+        // Short chats are never folded.
+        let mut small = crate::Store::default();
+        small.codex_conversation.push(message(Role::User, "안녕"));
+        assert!(next_job(&small).is_none());
     }
 
     #[test]
@@ -628,9 +790,9 @@ mod tests {
             let date = format!("{}-{:02}-{:02}", 2024 + i / 336, (i / 28) % 12 + 1, i % 28 + 1);
             list.push(entry(i, &date, &format!("제목{i}"), &"가".repeat(2_000)));
         }
-        let (ec, mut mc) = (HashMap::new(), HashMap::new());
-        mc.insert("2024-01".to_owned(), MonthSummary { signature: "s".into(), text: "첫 달 개요".into() });
-        let ctx = diary_context(&list, &ec, &mc, "제목7 이야기", day(2026, 11, 11));
+        let mut store = crate::Store { entries: list, ..crate::Store::default() };
+        store.codex_month_summaries.insert("2024-01".to_owned(), MonthSummary { signature: "s".into(), text: "첫 달 개요".into() });
+        let ctx = diary_context(&store, "제목7 이야기", day(2026, 11, 11));
         assert_eq!(ctx["counts"]["total_entries"], 400);
         assert!(ctx["counts"]["most_recent_entries_in_full"].as_u64().unwrap() <= RECENT_MAX as u64);
         assert!(ctx["counts"]["oldest_entries_not_listed"].as_u64().unwrap() > 0);

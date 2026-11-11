@@ -18,7 +18,7 @@ export function SummaryPanel() {
       </div>
       <Button variant="ghost" size="icon-sm" aria-label="대화 닫기" onClick={close}><X size={17} /></Button>
     </div>
-    {organizing && <p className="codex-memory-status" role="status">지난 일기를 정리하며 기억하는 중이에요. 메시지를 보내면 바로 대화할 수 있어요.</p>}
+    {organizing && <p className="codex-memory-status" role="status">지난 일기와 대화를 정리하며 기억하는 중이에요. 메시지를 보내면 바로 대화할 수 있어요.</p>}
     <div ref={conversation} className="codex-conversation" role="log" aria-label="Niki 대화" aria-live="polite" aria-busy={busy}>
       {!ready && !error && <p role="status">대화를 불러오는 중…</p>}
       {ready && !busy && !messages.length && <div className="codex-conversation-empty"><MessageSquare size={25} strokeWidth={1.4} /><p>Niki에게 이야기를 들려주세요.<br />열려 있는 일기를 요약할 수도 있어요.</p></div>}
