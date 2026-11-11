@@ -2027,10 +2027,7 @@ pub fn run() {
                 let _ = window.set_icon(icon);
             }
             app.manage(codex::Service::default());
-            // The on-device search model comes with the app: fetched once in the background.
-            let vectors = embed::Vectors::default();
-            vectors.ensure_model(&data_dir);
-            app.manage(vectors);
+            app.manage(embed::Vectors::default());
             app.manage(AppState {
                 data_dir,
                 store: Arc::new(Mutex::new(store)),

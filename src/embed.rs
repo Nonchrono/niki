@@ -408,9 +408,9 @@ pub struct Vectors {
 }
 
 impl Vectors {
-    /// Fetches the model in the background when it is missing, like part of installing the
-    /// app: at startup, and again (at most once a minute) while the chat panel is open if an
-    /// earlier attempt failed. The model is kept across app updates, so this happens once.
+    /// Fetches the model in the background when it is missing, once a GPT account is connected
+    /// (checked whenever the app reads the Codex status), retrying at most once a minute after a
+    /// failure. The model is kept across app updates, so this normally happens once.
     pub fn ensure_model(&self, data_dir: &Path) {
         if installed(data_dir) {
             return;

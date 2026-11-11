@@ -571,13 +571,20 @@ pub fn selected_entry<'a>(
 pub(crate) async fn codex_status(
     state: tauri::State<'_, crate::AppState>,
     service: tauri::State<'_, Service>,
+    vectors: tauri::State<'_, crate::embed::Vectors>,
 ) -> Result<Status, String> {
     crate::ensure_unlocked(&state)?;
     let home = state.data_dir.join("codex");
     let service = service.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || service.status(&home))
+    let status = tauri::async_runtime::spawn_blocking(move || service.status(&home))
         .await
-        .map_err(|_| "Codex 상태 확인 실패")?
+        .map_err(|_| "Codex 상태 확인 실패")??;
+    // The search model is only useful with a connected GPT account, so it is fetched (once,
+    // in the background) the first time the app sees a connected account.
+    if status.connected {
+        vectors.ensure_model(&state.data_dir);
+    }
+    Ok(status)
 }
 #[tauri::command]
 pub(crate) async fn codex_connect(
@@ -863,7 +870,8 @@ pub struct MemoryModel {
     pub total_bytes: u64,
 }
 
-/// Search-model status for the chat panel. Also retries a failed automatic download.
+/// Search-model status for the chat panel (only shown when connected). Also retries a failed
+/// automatic download.
 #[tauri::command]
 pub(crate) fn codex_memory_model(
     state: tauri::State<'_, crate::AppState>,
