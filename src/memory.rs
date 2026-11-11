@@ -325,6 +325,35 @@ pub fn next_job(store: &crate::Store) -> Option<Job> {
     })
 }
 
+/// Stores the summaries the model returned. Entries it skipped get their opening lines as the
+/// gist so one entry the model will not summarize cannot make every later run resend it; when
+/// nothing usable came back only the first entry is parked, so a transient failure costs little.
+/// Entries edited or deleted while Codex was working are left for the next run.
+pub fn apply_entry_summaries(
+    store: &mut crate::Store,
+    sent: &[(String, String)],
+    parsed: Vec<(String, String)>,
+) {
+    let mut texts: HashMap<String, String> = parsed.into_iter().collect();
+    let park = if texts.is_empty() { sent.len().min(1) } else { sent.len() };
+    for (id, updated_at) in sent.iter().take(park) {
+        let Some(entry) = store
+            .entries
+            .iter()
+            .find(|e| e.id == *id && e.updated_at == *updated_at && e.deleted_at.is_none())
+        else {
+            continue;
+        };
+        let text = texts
+            .remove(id)
+            .unwrap_or_else(|| truncate_chars(entry.body.trim(), FALLBACK_EXCERPT_CHARS));
+        store
+            .codex_entry_summaries
+            .insert(id.clone(), EntrySummary { updated_at: updated_at.clone(), text });
+    }
+    prune(&store.entries, &mut store.codex_entry_summaries, &mut store.codex_month_summaries);
+}
+
 /// Reads the model's JSON array, keeping only summaries for ids that were actually sent.
 pub fn parse_entry_summaries(output: &str, allowed: &HashSet<String>) -> Vec<(String, String)> {
     let (Some(start), Some(end)) = (output.find('['), output.rfind(']')) else {
@@ -446,7 +475,9 @@ fn date_range(query: &str, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
     if has("이번주") || has("이번 주") {
         return Some((monday, today));
     }
-    if has("그저께") || has("그제") {
+    // "그제서야"/"그제야" mean "only then", not "the day before yesterday".
+    let geuje = query.replace("그제서야", "").replace("그제야", "");
+    if has("그저께") || geuje.contains("그제") {
         let day = today - Duration::days(2);
         return Some((day, day));
     }
@@ -526,24 +557,35 @@ fn search_in<'a>(
 ) -> Vec<&'a Entry> {
     let all = active(entries);
     let terms: Vec<String> = bigrams(query).into_iter().collect();
+    let explicit = period.is_some();
+    let mut found: Vec<&Entry> = Vec::new();
     if let Some((from, to)) = period.or_else(|| date_range(query, today)) {
         let pool: Vec<&Entry> = all
             .iter()
             .copied()
             .filter(|e| entry_date(e).map_or(false, |d| d >= from && d <= to))
             .collect();
-        let mut found = rank(&pool, &terms);
+        found = rank(&pool, &terms);
         if found.is_empty() {
             found = pool;
             found.sort_by(|a, b| b.date.cmp(&a.date));
         }
-        if !found.is_empty() {
+        // A period the planner chose is a hard filter. One guessed from words like "오늘" only
+        // puts that period first: "오늘 엄마랑 또 싸웠어" should still find older fights.
+        if explicit && !found.is_empty() {
             found.truncate(limit);
             return found;
         }
+        found.truncate(limit.div_ceil(2));
     }
-    let mut found = rank(&all, &terms);
-    found.truncate(limit);
+    for e in rank(&all, &terms) {
+        if found.len() >= limit {
+            break;
+        }
+        if !found.iter().any(|x| x.id == e.id) {
+            found.push(e);
+        }
+    }
     found
 }
 
@@ -699,7 +741,9 @@ fn month_overview(store: &crate::Store) -> Vec<Value> {
 /// Input for the planning request, or `None` when the diary is small enough to be sent whole.
 pub fn planner_prompt(store: &crate::Store, message: &str, today: NaiveDate) -> Option<String> {
     let live = active(&store.entries);
-    if live.len() <= RECENT_MAX {
+    // Same rule as the recent tier in `diary_context`: if every entry is sent in full, there is
+    // nothing left to look up.
+    if live.len() <= RECENT_MAX && live.iter().map(|e| full_cost(e)).sum::<usize>() <= RECENT_BUDGET {
         return None;
     }
     let mut dates: Vec<&str> = live.iter().map(|e| e.date.as_str()).collect();
@@ -937,6 +981,92 @@ mod tests {
         let plan = vec![PlannedSearch { query: "바닷가".into(), period: Some((day(2024, 1, 1), day(2024, 12, 31))) }];
         let planned = diary_context(&store, "그때 즐거웠던 일", today, &plan);
         assert!(titles(&planned).contains("제주도"));
+    }
+
+    #[test]
+    fn review_relative_day_words_do_not_hide_keyword_matches() {
+        let today = day(2026, 11, 11);
+        let list = vec![
+            entry(1, "2025-03-02", "엄마와 다툼", "엄마랑 크게 싸웠다. 서운했다."),
+            entry(2, "2026-11-11", "출근", "회사에 갔다."),
+        ];
+        let hits = search(&list, "오늘 엄마랑 또 싸웠어", today, 5);
+        assert!(hits.iter().any(|e| e.id == "e1"), "{:?}", hits.iter().map(|e| &e.id).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn review_geuje_inside_other_words_is_not_a_date() {
+        let today = day(2026, 11, 11);
+        assert_eq!(date_range("그제서야 알았어", today), None);
+        assert_eq!(date_range("이제야 그제야 깨달았다", today), None);
+        assert!(date_range("그제 뭐 했더라", today).is_some());
+    }
+
+    #[test]
+    fn review_planner_skipped_only_when_everything_fits_in_full() {
+        let today = day(2026, 11, 11);
+        let long = crate::Store {
+            entries: (0..10).map(|i| entry(i, "2026-01-01", "t", &"가".repeat(2_000))).collect(),
+            ..crate::Store::default()
+        };
+        assert!(planner_prompt(&long, "예전 일", today).is_some(), "10 long entries do not fit the recent tier");
+        let short = crate::Store {
+            entries: (0..14).map(|i| entry(i, "2026-01-01", "t", "짧음")).collect(),
+            ..crate::Store::default()
+        };
+        assert!(planner_prompt(&short, "예전 일", today).is_none());
+    }
+
+    #[test]
+    fn review_unsummarizable_entries_do_not_retry_forever() {
+        let long = "가".repeat(400);
+        let mut store = crate::Store {
+            entries: vec![entry(1, "2026-09-01", "a", &long), entry(2, "2026-09-02", "b", &long)],
+            ..crate::Store::default()
+        };
+        let Some(Job::Entries { sent, .. }) = next_job(&store) else { panic!() };
+        // The model answered for only one of the two entries.
+        apply_entry_summaries(&mut store, &sent, vec![("e1".to_owned(), "요약".to_owned())]);
+        assert_eq!(stale_entries(&store.entries, &store.codex_entry_summaries).len(), 0);
+        assert_eq!(store.codex_entry_summaries["e1"].text, "요약");
+        assert!(store.codex_entry_summaries["e2"].text.starts_with("가가"));
+        // Nothing usable from the model: only the first entry of the batch is parked.
+        let mut fresh = crate::Store {
+            entries: vec![entry(3, "2026-09-03", "c", &long), entry(4, "2026-09-04", "d", &long)],
+            ..crate::Store::default()
+        };
+        let Some(Job::Entries { sent: both, .. }) = next_job(&fresh) else { panic!() };
+        apply_entry_summaries(&mut fresh, &both, Vec::new());
+        assert_eq!(fresh.codex_entry_summaries.len(), 1);
+        assert_eq!(stale_entries(&fresh.entries, &fresh.codex_entry_summaries).len(), 1);
+        // Editing the entry makes it eligible again.
+        store.entries[1].updated_at = "v2".into();
+        assert_eq!(stale_entries(&store.entries, &store.codex_entry_summaries).len(), 1);
+        // An entry edited while Codex was working keeps no summary for the old text.
+        let Some(Job::Entries { sent, .. }) = next_job(&store) else { panic!() };
+        store.entries[1].updated_at = "v3".into();
+        apply_entry_summaries(&mut store, &sent, vec![("e2".to_owned(), "옛 요약".to_owned())]);
+        assert_eq!(stale_entries(&store.entries, &store.codex_entry_summaries).len(), 1);
+    }
+
+    #[test]
+    fn review_large_diary_context_is_fast_enough() {
+        let today = day(2026, 11, 11);
+        let store = crate::Store {
+            entries: (0..5_000u32)
+                .map(|i| entry(i, &format!("{}-{:02}-{:02}", 2013 + i / 400, i % 12 + 1, i % 28 + 1), "하루", &"오늘은 회사에서 일하고 집에 와서 쉬었다. ".repeat(40)))
+                .collect(),
+            ..crate::Store::default()
+        };
+        let plan = vec![
+            PlannedSearch { query: "제주도 친구 여름 휴가".into(), period: None },
+            PlannedSearch { query: "엄마".into(), period: Some((day(2020, 1, 1), day(2020, 12, 31))) },
+        ];
+        let started = std::time::Instant::now();
+        let ctx = diary_context(&store, "요즘 회사 일이 너무 힘들어", today, &plan);
+        let elapsed = started.elapsed();
+        println!("5,000 entries: {elapsed:?}, {} bytes", ctx.to_string().len());
+        assert!(elapsed.as_secs_f64() < 5.0);
     }
 
     #[test]

@@ -399,6 +399,13 @@ impl Client {
                 Some(message) => message,
                 None => self.receive(deadline)?,
             };
+            // One process may serve several turns (plan, then reply); ignore other threads' events.
+            if message["params"]["threadId"]
+                .as_str()
+                .is_some_and(|other| other != thread_id)
+            {
+                continue;
+            }
             match message["method"].as_str() {
                 Some("item/started")
                     if matches!(
@@ -709,44 +716,35 @@ pub(crate) async fn codex_chat(
         chat_prompt(&store, &message, today, &[])?;
         crate::memory::planner_prompt(&store, &message, today)
     };
-    // Step 1 (best effort): let the model say which past entries to look up. Any failure just
-    // falls back to the automatic search, so chatting never depends on it.
-    let plan = match planner {
-        Some(prompt) => {
-            let (home, app) = (home.clone(), app.clone());
-            tauri::async_runtime::spawn_blocking(move || {
-                let output = Client::start(&home, "keyring")?.respond(
-                    prompt,
-                    PLAN_INSTRUCTIONS,
-                    PLAN_DEVELOPER,
-                    || app.state::<crate::AppState>().unlocked.load(Ordering::SeqCst),
-                )?;
-                Ok::<_, String>(crate::memory::parse_plan(&output, today))
-            })
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .unwrap_or_default()
-        }
-        None => Vec::new(),
-    };
-    crate::ensure_unlocked(&state)?;
-    let prompt = {
-        let store = state.store.lock().map_err(|_| "대화를 읽을 수 없습니다")?;
-        chat_prompt(&store, &message, today, &plan)?
-    };
-    append_message(
-        &state,
-        ChatMessage::new(Role::User, message.trim().to_owned(), MessageKind::Chat),
-    )?;
     let result = tauri::async_runtime::spawn_blocking(move || {
-        Client::start(&home, "keyring")?.respond(
-            prompt,
-            CHAT_INSTRUCTIONS,
-            CHAT_DEVELOPER_INSTRUCTIONS,
-            || app.state::<crate::AppState>().unlocked.load(Ordering::SeqCst),
-        )
-    }).await.map_err(|_| "대화 처리 실패")??;
+        let unlocked = || app.state::<crate::AppState>().unlocked.load(Ordering::SeqCst);
+        let mut client = Client::start(&home, "keyring")?;
+        // Step 1 (best effort): let the model say which past entries to look up. Any failure
+        // falls back to the automatic search with a fresh Codex process.
+        let plan = match planner {
+            Some(prompt) => match client.respond(prompt, PLAN_INSTRUCTIONS, PLAN_DEVELOPER, &unlocked) {
+                Ok(output) => crate::memory::parse_plan(&output, today),
+                Err(_) => {
+                    client = Client::start(&home, "keyring")?;
+                    Vec::new()
+                }
+            },
+            None => Vec::new(),
+        };
+        let state = app.state::<crate::AppState>();
+        crate::ensure_unlocked(&state)?;
+        let prompt = {
+            let store = state.store.lock().map_err(|_| "대화를 읽을 수 없습니다")?;
+            chat_prompt(&store, &message, today, &plan)?
+        };
+        append_message(
+            &state,
+            ChatMessage::new(Role::User, message.trim().to_owned(), MessageKind::Chat),
+        )?;
+        client.respond(prompt, CHAT_INSTRUCTIONS, CHAT_DEVELOPER_INSTRUCTIONS, &unlocked)
+    })
+    .await
+    .map_err(|_| "대화 처리 실패")??;
     crate::ensure_unlocked(&state)?;
     append_message(
         &state,
@@ -810,33 +808,14 @@ pub(crate) async fn codex_refresh_memory(
             let allowed: std::collections::HashSet<String> =
                 sent.iter().map(|(id, _)| id.clone()).collect();
             let parsed = crate::memory::parse_entry_summaries(&output, &allowed);
-            if parsed.is_empty() {
-                return Err("일기 요약 결과를 읽지 못했습니다".into());
-            }
+            let usable = !parsed.is_empty();
             crate::mutate(&state, |store| {
-                for (id, text) in parsed {
-                    let Some((_, updated_at)) = sent.iter().find(|(sent_id, _)| *sent_id == id)
-                    else {
-                        continue;
-                    };
-                    // Skip entries edited or deleted while Codex was working.
-                    let current = store.entries.iter().any(|e| {
-                        e.id == id && e.updated_at == *updated_at && e.deleted_at.is_none()
-                    });
-                    if current {
-                        store.codex_entry_summaries.insert(
-                            id,
-                            crate::memory::EntrySummary { updated_at: updated_at.clone(), text },
-                        );
-                    }
-                }
-                crate::memory::prune(
-                    &store.entries,
-                    &mut store.codex_entry_summaries,
-                    &mut store.codex_month_summaries,
-                );
+                crate::memory::apply_entry_summaries(store, &sent, parsed);
                 Ok(())
             })?;
+            if !usable {
+                return Err("일기 요약 결과를 읽지 못했습니다".into());
+            }
         }
         crate::memory::Job::Conversation { through_id, .. } => {
             crate::mutate(&state, |store| {

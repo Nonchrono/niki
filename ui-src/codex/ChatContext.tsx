@@ -76,6 +76,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
       const history = await run<ChatMessage[]>(summaryTarget ? 'codex_summarize' : 'codex_chat', args);
       if (active.current) { setMessages(history); if (!summaryTarget) setDraft(''); }
+      // Keep folding old messages and summarizing new diaries between messages.
+      if (active.current) setTimeout(organize, 0);
     } catch (e) {
       if (active.current) { setError(errorMessage(e)); await reload(); }
     } finally {
