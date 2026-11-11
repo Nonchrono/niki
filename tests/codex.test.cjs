@@ -13,7 +13,7 @@ const fs = require('node:fs');
     await page.route('https://**/*', route => route.abort());
     await page.addInitScript(() => {
       window.calls = []; window.failSave = false; window.deferSummary = false; window.failChat = false;
-      window.chatHistory = []; window.memoryLeft = 0;
+      window.chatHistory = []; window.memoryLeft = 0; window.memoryModel = { installed: true, downloading: false, downloaded_bytes: 0, total_bytes: 111821878 };
       window.codexStatus = { installed: true, connected: false, plan: null, login_pending: false };
       const entry = (id, title, body) => ({ id, journal_id: 'j1', title, body, date: '2026-11-10', created_at: 'v1', updated_at: 'v1', tags: [], favorite: false, location: '', weather: '', attachments: [], deleted_at: null });
       window.sample = {
@@ -41,6 +41,13 @@ const fs = require('node:fs');
           const answer = deferSummary ? await new Promise(resolve => { window.completeSummary = resolve; }) : '<script>window.injected = true</script> 산책하며 편안한 하루를 보냈다.';
           chatHistory.push({ id: `m${chatHistory.length}`, role: 'assistant', kind: 'summary', content: answer });
           return structuredClone(chatHistory);
+        }
+        if (name === 'codex_memory_model') return structuredClone(memoryModel);
+        if (name === 'codex_download_memory_model') {
+          memoryModel.downloading = true; memoryModel.downloaded_bytes = 50000000;
+          await new Promise(r => setTimeout(r, 1200));
+          Object.assign(memoryModel, { installed: true, downloading: false, downloaded_bytes: memoryModel.total_bytes });
+          return structuredClone(memoryModel);
         }
         if (name === 'codex_refresh_memory') {
           if (window.memoryLeft > 0) { window.memoryLeft -= 1; await new Promise(r => setTimeout(r, 120)); }
@@ -71,7 +78,7 @@ const fs = require('node:fs');
     await page.evaluate(() => location.hash = '#/settings/codex');
     await page.locator('[data-action="codex-connect"]').click();
     assert.equal(await page.getByRole('heading', { name: 'GPT 계정 연결', exact: true }).count(), 1);
-    assert.equal(await page.getByText('요약할 일기, 그리고 Niki와 대화·기억 정리에 쓰이는 삭제하지 않은 일기의 제목과 본문이 OpenAI에 전송됩니다.', { exact: true }).count(), 1);
+    assert.equal(await page.getByText('요약할 일기, 그리고 Niki와 대화할 때 찾은 일기의 제목과 본문이 OpenAI에 전송됩니다.', { exact: true }).count(), 1);
     assert.ok(!(await page.locator('#settings-detail').innerText()).includes('Niki의 로그인은'));
     await page.locator('.codex-device-code').waitFor();
     assert.equal(await page.locator('.codex-device-code').innerText(), 'DEMO-CODE');
@@ -161,6 +168,16 @@ const fs = require('node:fs');
     const afterReply = await refreshCalls();
     await page.waitForFunction(base => calls.filter(c => c.name === 'codex_refresh_memory').length > base, afterReply);
     assert.ok(true, 'memory building resumes after a reply');
+    // Search model offer: shown only when missing, downloaded only on request, with progress.
+    assert.equal(await page.locator('[data-action="download-memory-model"]').count(), 0, 'no offer once installed');
+    await page.evaluate(() => Object.assign(memoryModel, { installed: false, downloading: false, downloaded_bytes: 0 }));
+    await page.getByRole('button', { name: '대화 닫기', exact: true }).click();
+    await page.locator('[data-action="open-summary"]').click();
+    await page.locator('[data-action="download-memory-model"]').waitFor();
+    assert.equal(await page.evaluate(() => calls.filter(c => c.name === 'codex_download_memory_model').length), 0, 'never downloaded without a click');
+    await page.locator('[data-action="download-memory-model"]').click();
+    await page.getByText('검색 모델을 받는 중이에요', { exact: false }).waitFor();
+    await page.locator('.codex-model-offer').waitFor({ state: 'detached' });
     await page.evaluate(() => { failSave = true; });
     await page.locator('#entry-title').fill('충돌한 편집');
     await page.locator('[data-action="codex-summarize"]').click();

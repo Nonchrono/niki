@@ -18,6 +18,7 @@ mod sync_merge;
 mod zip_read;
 mod codex;
 mod memory;
+mod embed;
 
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
@@ -146,7 +147,6 @@ struct Store {
     version: u32,
     codex_conversation: Vec<codex::ChatMessage>,
     codex_conversation_summary: Option<memory::ConversationSummary>,
-    codex_entry_summaries: HashMap<String, memory::EntrySummary>,
     codex_month_summaries: HashMap<String, memory::MonthSummary>,
     nickname: String,
     updater_config: app_updater::UpdaterConfig,
@@ -1592,7 +1592,6 @@ fn export_backup(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<St
     store.password_hash = None;
     store.codex_conversation.clear();
     store.codex_conversation_summary = None;
-    store.codex_entry_summaries.clear();
     store.codex_month_summaries.clear();
     store.device_id.clear();
     store.sync_cursor = None;
@@ -2028,6 +2027,7 @@ pub fn run() {
                 let _ = window.set_icon(icon);
             }
             app.manage(codex::Service::default());
+            app.manage(embed::Vectors::default());
             app.manage(AppState {
                 data_dir,
                 store: Arc::new(Mutex::new(store)),
@@ -2062,6 +2062,8 @@ pub fn run() {
             codex::codex_chat,
             codex::codex_conversation,
             codex::codex_refresh_memory,
+            codex::codex_memory_model,
+            codex::codex_download_memory_model,
             bootstrap,
             unlock,
             lock,

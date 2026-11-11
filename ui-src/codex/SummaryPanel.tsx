@@ -5,7 +5,7 @@ import { Input } from '../components/ui/input';
 import { useChat } from './ChatContext';
 
 export function SummaryPanel() {
-  const { open, close, messages, organizing, pending, busy, error, ready, draft, setDraft, send, summarize, target, reload } = useChat();
+  const { open, close, messages, organizing, model, modelError, downloadModel, pending, busy, error, ready, draft, setDraft, send, summarize, target, reload } = useChat();
   const conversation = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState('');
   const [copyError, setCopyError] = useState('');
@@ -18,6 +18,15 @@ export function SummaryPanel() {
       </div>
       <Button variant="ghost" size="icon-sm" aria-label="대화 닫기" onClick={close}><X size={17} /></Button>
     </div>
+    {model && !model.installed && <div className="codex-memory-status codex-model-offer">
+      {model.downloading
+        ? <p role="status">검색 모델을 받는 중이에요… {Math.min(99, Math.floor(model.downloaded_bytes / Math.max(1, model.total_bytes) * 100))}%</p>
+        : <>
+          <p>검색 모델({Math.round(model.total_bytes / 1_000_000)}MB)을 받으면 Niki가 비슷한 의미의 지난 일기까지 이 기기 안에서 찾아요. 일기는 검색을 위해 외부로 보내지 않아요.</p>
+          <Button variant="outline" size="xs" data-action="download-memory-model" onClick={() => void downloadModel()}>검색 모델 받기</Button>
+        </>}
+      {modelError && <p role="alert" className="sync-error">{modelError}</p>}
+    </div>}
     {organizing && <p className="codex-memory-status" role="status">지난 일기와 대화를 정리하며 기억하는 중이에요. 메시지를 보내면 바로 대화할 수 있어요.</p>}
     <div ref={conversation} className="codex-conversation" role="log" aria-label="Niki 대화" aria-live="polite" aria-busy={busy}>
       {!ready && !error && <p role="status">대화를 불러오는 중…</p>}

@@ -1,4 +1,5 @@
-//! Layered diary memory for Niki: cached summaries, local search and prompt assembly.
+//! Layered diary memory for Niki: local search (keywords, dates and on-device embeddings),
+//! monthly overviews, rolling chat summaries and prompt assembly.
 //! Everything here is pure and local; only the assembled prompt ever leaves the device.
 use crate::Entry;
 use crate::codex::ChatMessage;
@@ -7,12 +8,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct EntrySummary {
-    pub updated_at: String,
-    pub text: String,
-}
 
 /// Rolling summary of the oldest chat messages, up to and including `through_id`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -27,12 +22,7 @@ pub struct MonthSummary {
     pub text: String,
 }
 
-/// Entries at most this long are their own summary and are never sent to be summarized.
-pub const SUMMARY_MIN_CHARS: usize = 300;
 // Budgets are in estimated tokens (see `est_tokens`), not bytes.
-const BATCH_ENTRIES: usize = 12;
-const BATCH_TOKENS: usize = 9_000;
-const SUMMARY_INPUT_CHARS: usize = 3_000;
 const RECENT_BUDGET: usize = 10_000;
 const RECENT_MAX: usize = 14;
 const ENTRY_CAP_CHARS: usize = 3_000;
@@ -40,7 +30,11 @@ const RELEVANT_BUDGET: usize = 8_000;
 const RELEVANT_MAX: usize = 6;
 const MONTH_BUDGET: usize = 5_000;
 const DIGEST_BUDGET: usize = 7_000;
-const FALLBACK_EXCERPT_CHARS: usize = 160;
+const NOTE_CHARS: usize = 240;
+const MONTH_ENTRY_CHARS: usize = 600;
+const MONTH_INPUT_TOKENS: usize = 9_000;
+const SEMANTIC_CANDIDATES: usize = 8;
+const SEMANTIC_MARGIN: f32 = 0.025;
 const CONVO_SEND_TOKENS: usize = 8_000;
 const CONVO_KEEP_TOKENS: usize = 6_000;
 const CONVO_FOLD_TRIGGER_TOKENS: usize = 3_000;
@@ -68,17 +62,13 @@ pub fn truncate_chars(text: &str, max: usize) -> String {
     }
 }
 
-fn active(entries: &[Entry]) -> Vec<&Entry> {
+pub(crate) fn active(entries: &[Entry]) -> Vec<&Entry> {
     entries
         .iter()
         .filter(|e| {
             e.deleted_at.is_none() && !(e.title.trim().is_empty() && e.body.trim().is_empty())
         })
         .collect()
-}
-
-fn needs_summary(e: &Entry) -> bool {
-    e.body.trim().chars().count() > SUMMARY_MIN_CHARS
 }
 
 fn month_of(e: &Entry) -> &str {
@@ -89,33 +79,12 @@ fn entry_date(e: &Entry) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(e.date.get(..10)?, "%Y-%m-%d").ok()
 }
 
-/// One line of gist for an entry: its cached summary, or the entry itself when short.
-pub fn digest(e: &Entry, cache: &HashMap<String, EntrySummary>) -> String {
-    let body = e.body.trim();
-    if !needs_summary(e) {
-        return truncate_chars(body, SUMMARY_MIN_CHARS);
-    }
-    match cache.get(&e.id) {
-        Some(s) if s.updated_at == e.updated_at => s.text.clone(),
-        _ => truncate_chars(body, FALLBACK_EXCERPT_CHARS),
-    }
+/// One line of gist for an older entry: its opening lines.
+pub fn digest(e: &Entry) -> String {
+    truncate_chars(e.body.trim(), NOTE_CHARS)
 }
 
 // ---------------------------------------------------------------- summary jobs
-
-pub fn stale_entries<'a>(
-    entries: &'a [Entry],
-    cache: &HashMap<String, EntrySummary>,
-) -> Vec<&'a Entry> {
-    let mut stale: Vec<&Entry> = active(entries)
-        .into_iter()
-        .filter(|e| {
-            needs_summary(e) && cache.get(&e.id).map_or(true, |s| s.updated_at != e.updated_at)
-        })
-        .collect();
-    stale.sort_by(|a, b| a.date.cmp(&b.date).then_with(|| a.id.cmp(&b.id)));
-    stale
-}
 
 fn signature(list: &[&Entry]) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -155,20 +124,13 @@ fn pending_months<'a>(
 }
 
 pub fn pending_count(store: &crate::Store) -> usize {
-    stale_entries(&store.entries, &store.codex_entry_summaries).len()
-        + foldable_tokens(store).div_ceil(CONVO_JOB_TOKENS)
+    foldable_tokens(store).div_ceil(CONVO_JOB_TOKENS)
         + pending_months(&store.entries, &store.codex_month_summaries).len()
 }
 
-/// Drops cached summaries whose diary or month no longer exists.
-pub fn prune(
-    entries: &[Entry],
-    entry_cache: &mut HashMap<String, EntrySummary>,
-    month_cache: &mut HashMap<String, MonthSummary>,
-) {
+/// Drops monthly overviews whose month no longer has enough entries.
+pub fn prune(entries: &[Entry], month_cache: &mut HashMap<String, MonthSummary>) {
     let live = active(entries);
-    let ids: HashSet<&str> = live.iter().map(|e| e.id.as_str()).collect();
-    entry_cache.retain(|id, _| ids.contains(id.as_str()));
     let mut count: HashMap<&str, usize> = HashMap::new();
     for e in &live {
         *count.entry(month_of(e)).or_insert(0) += 1;
@@ -235,10 +197,6 @@ pub fn conversation_context(
 }
 
 pub enum Job {
-    Entries {
-        prompt: String,
-        sent: Vec<(String, String)>,
-    },
     Conversation {
         prompt: String,
         through_id: String,
@@ -250,44 +208,9 @@ pub enum Job {
     },
 }
 
-/// The next piece of work: stale entries first, then folding old chat, then one finished month.
+/// The next piece of work for Codex: folding old chat first, then one finished month.
 pub fn next_job(store: &crate::Store) -> Option<Job> {
-    let (entries, entry_cache, month_cache) = (
-        &store.entries,
-        &store.codex_entry_summaries,
-        &store.codex_month_summaries,
-    );
-    let stale = stale_entries(entries, entry_cache);
-    if !stale.is_empty() {
-        let mut tokens = 0usize;
-        let mut batch: Vec<&Entry> = Vec::new();
-        for e in stale {
-            let cost = est_tokens(&e.title)
-                + est_tokens(&truncate_chars(e.body.trim(), SUMMARY_INPUT_CHARS));
-            if !batch.is_empty() && (batch.len() >= BATCH_ENTRIES || tokens + cost > BATCH_TOKENS) {
-                break;
-            }
-            tokens += cost;
-            batch.push(e);
-        }
-        let items: Vec<Value> = batch
-            .iter()
-            .map(|e| {
-                json!({
-                    "id": e.id, "date": e.date, "title": e.title,
-                    "body": truncate_chars(e.body.trim(), SUMMARY_INPUT_CHARS)
-                })
-            })
-            .collect();
-        let sent = batch
-            .iter()
-            .map(|e| (e.id.clone(), e.updated_at.clone()))
-            .collect();
-        return Some(Job::Entries {
-            prompt: json!({ "entries": items }).to_string(),
-            sent,
-        });
-    }
+    let (entries, month_cache) = (&store.entries, &store.codex_month_summaries);
     if foldable_tokens(store) > 0 {
         let (previous, open) =
             split_at_summary(&store.codex_conversation, &store.codex_conversation_summary);
@@ -314,69 +237,22 @@ pub fn next_job(store: &crate::Store) -> Option<Job> {
         return Some(Job::Conversation { prompt, through_id });
     }
     let (month, list, sig) = pending_months(entries, month_cache).into_iter().next()?;
-    let items: Vec<Value> = list
-        .iter()
-        .map(|e| json!({ "date": e.date, "title": e.title, "gist": digest(e, entry_cache) }))
-        .collect();
+    let mut tokens = 0usize;
+    let mut items: Vec<Value> = Vec::new();
+    for e in &list {
+        let text = truncate_chars(e.body.trim(), MONTH_ENTRY_CHARS);
+        let cost = est_tokens(&e.title) + est_tokens(&text) + 8;
+        if !items.is_empty() && tokens + cost > MONTH_INPUT_TOKENS {
+            break;
+        }
+        tokens += cost;
+        items.push(json!({ "date": e.date, "title": e.title, "text": text }));
+    }
     Some(Job::Month {
         prompt: json!({ "month": month, "entries": items }).to_string(),
         month,
         signature: sig,
     })
-}
-
-/// Stores the summaries the model returned. Entries it skipped get their opening lines as the
-/// gist so one entry the model will not summarize cannot make every later run resend it; when
-/// nothing usable came back only the first entry is parked, so a transient failure costs little.
-/// Entries edited or deleted while Codex was working are left for the next run.
-pub fn apply_entry_summaries(
-    store: &mut crate::Store,
-    sent: &[(String, String)],
-    parsed: Vec<(String, String)>,
-) {
-    let mut texts: HashMap<String, String> = parsed.into_iter().collect();
-    let park = if texts.is_empty() { sent.len().min(1) } else { sent.len() };
-    for (id, updated_at) in sent.iter().take(park) {
-        let Some(entry) = store
-            .entries
-            .iter()
-            .find(|e| e.id == *id && e.updated_at == *updated_at && e.deleted_at.is_none())
-        else {
-            continue;
-        };
-        let text = texts
-            .remove(id)
-            .unwrap_or_else(|| truncate_chars(entry.body.trim(), FALLBACK_EXCERPT_CHARS));
-        store
-            .codex_entry_summaries
-            .insert(id.clone(), EntrySummary { updated_at: updated_at.clone(), text });
-    }
-    prune(&store.entries, &mut store.codex_entry_summaries, &mut store.codex_month_summaries);
-}
-
-/// Reads the model's JSON array, keeping only summaries for ids that were actually sent.
-pub fn parse_entry_summaries(output: &str, allowed: &HashSet<String>) -> Vec<(String, String)> {
-    let (Some(start), Some(end)) = (output.find('['), output.rfind(']')) else {
-        return Vec::new();
-    };
-    if end < start {
-        return Vec::new();
-    }
-    let Ok(items) = serde_json::from_str::<Vec<Value>>(&output[start..=end]) else {
-        return Vec::new();
-    };
-    items
-        .iter()
-        .filter_map(|item| {
-            let id = item["id"].as_str()?;
-            let text = item["summary"].as_str()?.trim();
-            if allowed.contains(id) && !text.is_empty() {
-                Some((id.to_owned(), truncate_chars(text, 400)))
-            } else {
-                None
-            }
-        })
-        .collect()
 }
 
 // ---------------------------------------------------------------------- search
@@ -589,6 +465,49 @@ fn search_in<'a>(
     found
 }
 
+/// Reciprocal-rank fusion of keyword hits and embedding similarity. Only embedding hits close to
+/// the best one count (E5 scores sit in a narrow band, so an absolute cut-off would not work),
+/// and entries in a period named in the message ("작년", "3월") stay in front.
+fn fuse<'a>(
+    entries: &'a [Entry],
+    keyword: &[&'a Entry],
+    semantic: &[(String, f32)],
+    query: &str,
+    today: NaiveDate,
+) -> Vec<&'a Entry> {
+    let by_id: HashMap<&str, &Entry> = active(entries).into_iter().map(|e| (e.id.as_str(), e)).collect();
+    let mut score: HashMap<&str, f64> = HashMap::new();
+    for (rank, e) in keyword.iter().enumerate() {
+        *score.entry(e.id.as_str()).or_insert(0.0) += 1.0 / (60.0 + rank as f64 + 1.0);
+    }
+    let best = semantic.first().map_or(0.0, |(_, s)| *s);
+    for (rank, (id, similarity)) in semantic.iter().take(SEMANTIC_CANDIDATES).enumerate() {
+        if *similarity < best - SEMANTIC_MARGIN {
+            break;
+        }
+        if let Some(e) = by_id.get(id.as_str()) {
+            *score.entry(e.id.as_str()).or_insert(0.0) += 1.0 / (60.0 + rank as f64 + 1.0);
+        }
+    }
+    if let Some((from, to)) = date_range(query, today) {
+        for (id, value) in score.iter_mut() {
+            if by_id.get(id).and_then(|e| entry_date(e)).is_some_and(|d| d >= from && d <= to) {
+                *value += 1.0;
+            }
+        }
+    }
+    let mut ranked: Vec<(f64, &Entry)> = score
+        .into_iter()
+        .filter_map(|(id, value)| by_id.get(id).map(|e| (value, *e)))
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.1.date.cmp(&a.1.date))
+    });
+    ranked.into_iter().map(|(_, e)| e).collect()
+}
+
 // --------------------------------------------------------------- prompt context
 
 fn full_json(e: &Entry) -> Value {
@@ -609,8 +528,9 @@ pub fn diary_context(
     query: &str,
     today: NaiveDate,
     plan: &[PlannedSearch],
+    semantic: Option<&[(String, f32)]>,
 ) -> Value {
-    let (entries, entry_cache) = (&store.entries, &store.codex_entry_summaries);
+    let entries = &store.entries;
     let mut all = active(entries);
     all.sort_by(|a, b| {
         b.date
@@ -642,7 +562,12 @@ pub fn diary_context(
             }
         }
     }
-    for e in search(entries, query, today, RELEVANT_MAX + RECENT_MAX) {
+    let keyword = search(entries, query, today, RELEVANT_MAX + RECENT_MAX);
+    let ranked = match semantic {
+        Some(scores) => fuse(entries, &keyword, scores, query, today),
+        None => keyword,
+    };
+    for e in ranked {
         if !found.iter().any(|x| x.id == e.id) {
             found.push(e);
         }
@@ -677,7 +602,7 @@ pub fn diary_context(
         if used.contains(e.id.as_str()) {
             continue;
         }
-        let gist = digest(e, entry_cache);
+        let gist = digest(e);
         let cost = est_tokens(&e.title) + est_tokens(&gist) + 8;
         if full || tokens + cost > DIGEST_BUDGET {
             full = true;
@@ -861,40 +786,31 @@ mod tests {
     }
 
     #[test]
-    fn summary_jobs_follow_staleness() {
-        let long = "가".repeat(400);
+    fn month_overviews_follow_staleness_without_per_entry_summaries() {
+        let long = "가".repeat(900);
         let mut store = crate::Store {
             entries: vec![
                 entry(1, "2026-09-01", "하나", &long),
                 entry(2, "2026-09-02", "둘", "짧은 일기"),
-                entry(3, "2026-09-03", "셋", &long),
-                entry(4, "2026-10-01", "넷", "짧은 일기"),
+                entry(3, "2026-10-01", "셋", "이번 달"),
             ],
             ..crate::Store::default()
         };
-        assert_eq!(stale_entries(&store.entries, &store.codex_entry_summaries).len(), 2);
-        assert_eq!(pending_count(&store), 3); // 2 entries + September
-        let Some(Job::Entries { sent, .. }) = next_job(&store) else {
-            panic!("entries first");
-        };
-        assert_eq!(sent.len(), 2);
-        for (id, updated_at) in sent {
-            store.codex_entry_summaries.insert(id, EntrySummary { updated_at, text: "요약".into() });
-        }
-        let Some(Job::Month { month, signature, .. }) = next_job(&store) else {
-            panic!("month next");
+        assert_eq!(pending_count(&store), 1); // September only; October is the current month
+        let Some(Job::Month { month, signature, prompt }) = next_job(&store) else {
+            panic!("month job");
         };
         assert_eq!(month, "2026-09");
+        let sent: Value = serde_json::from_str(&prompt).unwrap();
+        assert_eq!(sent["entries"][0]["text"].as_str().unwrap().chars().count(), MONTH_ENTRY_CHARS + 1);
         store.codex_month_summaries.insert(month, MonthSummary { signature, text: "9월 개요".into() });
         assert_eq!(pending_count(&store), 0);
         assert!(next_job(&store).is_none());
-        let mut changed = store.clone();
-        changed.entries[0].updated_at = "v2".into();
-        assert_eq!(pending_count(&changed), 2); // the entry and its month
-        changed.entries.truncate(1);
-        prune(&changed.entries, &mut changed.codex_entry_summaries, &mut changed.codex_month_summaries);
-        assert_eq!(changed.codex_entry_summaries.len(), 1);
-        assert!(changed.codex_month_summaries.is_empty());
+        store.entries[0].updated_at = "v2".into();
+        assert_eq!(pending_count(&store), 1, "editing an entry refreshes its month");
+        store.entries.truncate(1);
+        prune(&store.entries, &mut store.codex_month_summaries);
+        assert!(store.codex_month_summaries.is_empty());
     }
 
     fn message(role: Role, text: &str) -> ChatMessage {
@@ -976,10 +892,10 @@ mod tests {
         let store = crate::Store { entries: list, ..crate::Store::default() };
         let today = day(2026, 11, 11);
         let titles = |ctx: &Value| ctx["entries_matching_the_message"].to_string();
-        let plain = diary_context(&store, "그때 즐거웠던 일", today, &[]);
+        let plain = diary_context(&store, "그때 즐거웠던 일", today, &[], None);
         assert!(!titles(&plain).contains("제주도"));
         let plan = vec![PlannedSearch { query: "바닷가".into(), period: Some((day(2024, 1, 1), day(2024, 12, 31))) }];
-        let planned = diary_context(&store, "그때 즐거웠던 일", today, &plan);
+        let planned = diary_context(&store, "그때 즐거웠던 일", today, &plan, None);
         assert!(titles(&planned).contains("제주도"));
     }
 
@@ -1018,35 +934,25 @@ mod tests {
     }
 
     #[test]
-    fn review_unsummarizable_entries_do_not_retry_forever() {
-        let long = "가".repeat(400);
-        let mut store = crate::Store {
-            entries: vec![entry(1, "2026-09-01", "a", &long), entry(2, "2026-09-02", "b", &long)],
-            ..crate::Store::default()
-        };
-        let Some(Job::Entries { sent, .. }) = next_job(&store) else { panic!() };
-        // The model answered for only one of the two entries.
-        apply_entry_summaries(&mut store, &sent, vec![("e1".to_owned(), "요약".to_owned())]);
-        assert_eq!(stale_entries(&store.entries, &store.codex_entry_summaries).len(), 0);
-        assert_eq!(store.codex_entry_summaries["e1"].text, "요약");
-        assert!(store.codex_entry_summaries["e2"].text.starts_with("가가"));
-        // Nothing usable from the model: only the first entry of the batch is parked.
-        let mut fresh = crate::Store {
-            entries: vec![entry(3, "2026-09-03", "c", &long), entry(4, "2026-09-04", "d", &long)],
-            ..crate::Store::default()
-        };
-        let Some(Job::Entries { sent: both, .. }) = next_job(&fresh) else { panic!() };
-        apply_entry_summaries(&mut fresh, &both, Vec::new());
-        assert_eq!(fresh.codex_entry_summaries.len(), 1);
-        assert_eq!(stale_entries(&fresh.entries, &fresh.codex_entry_summaries).len(), 1);
-        // Editing the entry makes it eligible again.
-        store.entries[1].updated_at = "v2".into();
-        assert_eq!(stale_entries(&store.entries, &store.codex_entry_summaries).len(), 1);
-        // An entry edited while Codex was working keeps no summary for the old text.
-        let Some(Job::Entries { sent, .. }) = next_job(&store) else { panic!() };
-        store.entries[1].updated_at = "v3".into();
-        apply_entry_summaries(&mut store, &sent, vec![("e2".to_owned(), "옛 요약".to_owned())]);
-        assert_eq!(stale_entries(&store.entries, &store.codex_entry_summaries).len(), 1);
+    fn embedding_hits_join_keyword_hits_and_stay_close_to_the_best() {
+        let today = day(2026, 11, 11);
+        let mut list = vec![
+            entry(1, "2024-07-10", "쓸쓸한 밤", "혼자 집에 있으니 아무도 연락이 없었다."),
+            entry(2, "2025-01-05", "외로움", "외로웠다."),
+            entry(3, "2025-02-01", "운동", "헬스장에 갔다."),
+        ];
+        for i in 10..40 {
+            list.push(entry(i, &format!("2026-{:02}-{:02}", i % 10 + 1, i % 28 + 1), "평범", "그냥 평범한 하루"));
+        }
+        let store = crate::Store { entries: list, ..crate::Store::default() };
+        // e1 shares no words with the message, but the embedding says it is about loneliness.
+        let semantic = vec![("e1".to_owned(), 0.86), ("e2".to_owned(), 0.85), ("e3".to_owned(), 0.80)];
+        let ctx = diary_context(&store, "외로웠던 때가 있었나", today, &[], Some(&semantic));
+        let found = ctx["entries_matching_the_message"].to_string();
+        assert!(found.contains("쓸쓸한 밤") && found.contains("외로움"), "{found}");
+        assert!(!found.contains("운동"), "far-off embedding hits are dropped: {found}");
+        let plain = diary_context(&store, "외로웠던 때가 있었나", today, &[], None);
+        assert!(!plain["entries_matching_the_message"].to_string().contains("쓸쓸한 밤"));
     }
 
     #[test]
@@ -1063,18 +969,10 @@ mod tests {
             PlannedSearch { query: "엄마".into(), period: Some((day(2020, 1, 1), day(2020, 12, 31))) },
         ];
         let started = std::time::Instant::now();
-        let ctx = diary_context(&store, "요즘 회사 일이 너무 힘들어", today, &plan);
+        let ctx = diary_context(&store, "요즘 회사 일이 너무 힘들어", today, &plan, None);
         let elapsed = started.elapsed();
         println!("5,000 entries: {elapsed:?}, {} bytes", ctx.to_string().len());
         assert!(elapsed.as_secs_f64() < 5.0);
-    }
-
-    #[test]
-    fn model_output_is_filtered_to_sent_ids() {
-        let allowed: HashSet<String> = ["e1".to_owned(), "e2".to_owned()].into();
-        let out = "```json\n[{\"id\":\"e1\",\"summary\":\" 산책 \"},{\"id\":\"zz\",\"summary\":\"x\"},{\"id\":\"e2\",\"summary\":\"\"}]\n```";
-        assert_eq!(parse_entry_summaries(out, &allowed), vec![("e1".to_owned(), "산책".to_owned())]);
-        assert!(parse_entry_summaries("요약 불가", &allowed).is_empty());
     }
 
     #[test]
@@ -1086,7 +984,7 @@ mod tests {
         }
         let mut store = crate::Store { entries: list, ..crate::Store::default() };
         store.codex_month_summaries.insert("2024-01".to_owned(), MonthSummary { signature: "s".into(), text: "첫 달 개요".into() });
-        let ctx = diary_context(&store, "제목7 이야기", day(2026, 11, 11), &[]);
+        let ctx = diary_context(&store, "제목7 이야기", day(2026, 11, 11), &[], None);
         assert_eq!(ctx["counts"]["total_entries"], 400);
         assert!(ctx["counts"]["most_recent_entries_in_full"].as_u64().unwrap() <= RECENT_MAX as u64);
         assert!(ctx["counts"]["oldest_entries_not_listed"].as_u64().unwrap() > 0);

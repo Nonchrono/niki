@@ -18,6 +18,8 @@ ring = "0.17"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 url = "2.5"
 tokio = { version = "1", features = ["time"] }
+tract-onnx = "0.23"
+tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-regex"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
