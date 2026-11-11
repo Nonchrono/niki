@@ -36,7 +36,7 @@ declare global {
   interface Window {
     __TAURI__?: {
       core: { invoke: <T>(name: string, args?: Record<string, unknown>) => Promise<T> };
-      event?: { listen: (name: string, callback: () => void) => Promise<() => void> };
+      event?: { listen: (name: string, callback: (event: { payload: unknown }) => void) => Promise<() => void> };
     };
   }
 }

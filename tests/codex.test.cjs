@@ -42,6 +42,9 @@ const fs = require('node:fs');
           chatHistory.push({ id: `m${chatHistory.length}`, role: 'assistant', kind: 'summary', content: answer });
           return structuredClone(chatHistory);
         }
+        if (name === 'codex_prefs') return { consented: true, excluded_journals: [], model: null, default_model: 'gpt-6-luna', model_fallback: false, background: true };
+        if (name === 'codex_cli_info') return { path: '/usr/local/bin/codex', version: '0.167.1', supported: true, custom: false, min_version: '0.167' };
+        if (name === 'codex_memory_info') return { model_installed: true, model_bytes: 1, index_bytes: 1, indexed_entries: 0, total_entries: 0, downloading: false, failed: false, months_summarized: 0, chat_summarized: false };
         if (name === 'codex_memory_model') return structuredClone(memoryModel);
         if (name === 'codex_refresh_memory') {
           if (window.memoryLeft > 0) { window.memoryLeft -= 1; await new Promise(r => setTimeout(r, 120)); }
@@ -85,7 +88,7 @@ const fs = require('node:fs');
     await page.evaluate(() => location.hash = '#/all/entries/e1');
     await page.locator('[data-action="open-summary"]').click();
     await page.locator('[data-action="codex-summarize"]').waitFor();
-    assert.equal(await page.locator('#diary-summary-sidebar input').count(), 1);
+    assert.equal(await page.locator('#diary-summary-sidebar textarea').count(), 1);
     assert.equal(await page.locator('#diary-summary-sidebar h3').innerText(), 'Niki와 대화');
     assert.equal(await page.locator('[data-action="open-summary"]').count(), 0, 'floating toggle is hidden while the panel is open');
     assert.equal(await page.locator('.topbar [data-action="open-summary"]').count(), 0, 'top bar has no chat toggle');

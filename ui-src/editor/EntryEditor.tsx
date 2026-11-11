@@ -104,7 +104,7 @@ export function EntryEditor({ entry }: { entry: Entry }) {
   const summaryPrepare = useRef<() => Promise<string | null>>(async () => null);
   summaryPrepare.current = async () => await saveCurrent() ? expected.current.updated_at : null;
   useEffect(() => {
-    registerTarget({ entryId: entry.id, title: fields.title, disabled: uploading || conflict, prepare: () => summaryPrepare.current() });
+    registerTarget({ entryId: entry.id, title: fields.title, disabled: uploading || conflict, prepare: () => summaryPrepare.current(), append: text => editor.current?.appendText(text) ?? false });
     return () => registerTarget(null);
   }, [entry.id, fields.title, uploading, conflict, registerTarget]);
   useEffect(() => { registerLeave(() => leaveRef.current()); return () => registerLeave(null); }, [registerLeave]);

@@ -10,7 +10,7 @@ import { imageMarkdown, needsSourceEditor, NikiImage } from './markdown';
 export interface TiptapEditorHandle {
   getBody: () => string; format: (kind: string) => void; rememberSelection: () => void;
   insertImage: (id: string, alt: string) => boolean; setEditable: (value: boolean) => void;
-  insertTemplate: (text: string) => boolean; source: boolean;
+  insertTemplate: (text: string) => boolean; appendText: (text: string) => boolean; source: boolean;
 }
 interface Props { initialBody: string; onChange: () => void; resolveImage: (id: string) => Promise<string> }
 
@@ -69,6 +69,20 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(function Tipta
       if (kind === 'quote') chain.toggleBlockquote().run();
       if (kind === 'list') chain.toggleBulletList().run();
       if (kind === 'check') chain.toggleTaskList().run();
+    },
+    appendText: text => {
+      if (needsSourceEditor(text)) return false;
+      if (source) {
+        const field = textarea.current;
+        if (!field) return false;
+        field.value = field.value + (field.value ? '\n\n' : '') + text;
+        onChangeRef.current();
+        return true;
+      }
+      const instance = editor.current;
+      if (!instance) return false;
+      instance.chain().focus('end').insertContentAt(instance.state.doc.content.size, '\n\n' + text, { contentType: 'markdown' }).run();
+      return true;
     },
     insertTemplate: text => {
       if (needsSourceEditor(text)) return false;

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import {
   BookOpenText, CalendarDays, ChevronsLeft, ChevronsRight, Images,
-  Pencil, Plus, RefreshCw, Settings2, Sparkles, Trash2, type LucideIcon,
+  Eye, EyeOff, Pencil, Plus, RefreshCw, Settings2, Sparkles, Trash2, type LucideIcon,
 } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { useApp } from './AppContext';
@@ -11,6 +11,7 @@ import type { Journal } from '../types';
 import { askConfirm, askText } from '../lib/dialog';
 import { ChatProvider, useChat } from '../codex/ChatContext';
 import { ChatToggle } from '../codex/ChatToggle';
+import { CODEX_PREFS_CHANGED } from '../codex/useGptConnection';
 import { SummaryPanel } from '../codex/SummaryPanel';
 
 const sections: { path: string; action: string; Icon: LucideIcon; label: string }[] = [
@@ -91,6 +92,7 @@ function ShellContent() {
         }}>
         <span className="dot" style={{ background: journal.color }} />
         <span className="side-label">{journal.name}</span>
+        {chat.prefs?.excluded_journals.includes(journal.id) && <EyeOff size={13} className="journal-hidden" aria-label="Niki에게 숨김" />}
         <span className="count">{active.filter(entry => entry.journal_id === journal.id).length}</span>
       </button>)}
       <button className="side-row side-add" data-action="new-journal" onClick={() => void action(async () => {
@@ -128,7 +130,7 @@ function ShellContent() {
             })}>이 버전 건너뛰기</Button>
           </div>
         </div>}
-      <div className="content" id="content"><Outlet />{chat.connected && <><ChatToggle /><SummaryPanel /></>}</div>
+      <div className={`content${chat.pinned && chat.open && chat.connected ? ' chat-pinned' : ''}`} id="content"><Outlet />{chat.connected && <><ChatToggle /><SummaryPanel /></>}</div>
     </main>
     {journalMenu && <div className="menu-backdrop" onClick={() => setJournalMenu(null)}>
       <div className="context-menu journal-menu" style={{ left: journalMenu.x, top: journalMenu.y }} onClick={event => event.stopPropagation()}>
@@ -142,6 +144,15 @@ function ShellContent() {
           await refresh();
           setJournalMenu(null);
         })}><Pencil size={15} />수정</button>
+        {chat.connected && (() => {
+          const hidden = !!chat.prefs?.excluded_journals.includes(journalMenu.journal.id);
+          return <button className="context-menu-item" data-action="toggle-journal-hidden" onClick={() => void action(async () => {
+            await run('codex_set_journal_excluded', { journalId: journalMenu.journal.id, excluded: !hidden });
+            window.dispatchEvent(new Event(CODEX_PREFS_CHANGED));
+            toast(hidden ? '이 일기장을 Niki가 다시 볼 수 있어요' : '이 일기장은 Niki에게 보이지 않아요');
+            setJournalMenu(null);
+          })}>{hidden ? <Eye size={15} /> : <EyeOff size={15} />}{hidden ? 'Niki에게 보이기' : 'Niki에게 숨기기'}</button>;
+        })()}
         <button className="context-menu-item danger" data-action="delete-journal" onClick={() => void action(async () => {
           if (!await askConfirm('일기장을 삭제할까요? 휴지통에 있는 일기는 다른 일기장의 휴지통으로 옮겨집니다.', { okLabel: '삭제', danger: true })) return;
           await run('delete_journal', { id: journalMenu.journal.id });

@@ -3,6 +3,7 @@ import { invoke } from '../lib/tauri';
 import type { CodexStatus } from './CodexSettings';
 
 export const GPT_CONNECTION_CHANGED = 'niki-gpt-connection-changed';
+export const CODEX_PREFS_CHANGED = 'niki-codex-prefs-changed';
 
 export function useGptConnection() {
   const [connected, setConnected] = useState(false);

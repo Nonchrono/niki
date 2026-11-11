@@ -147,6 +147,14 @@ struct Store {
     version: u32,
     codex_conversation: Vec<codex::ChatMessage>,
     codex_conversation_summary: Option<memory::ConversationSummary>,
+    /// The user agreed to send diary text to OpenAI through Niki's chat.
+    codex_consent: bool,
+    /// Journals Niki must never see. Local to this device, not synced.
+    codex_excluded_journals: HashSet<String>,
+    codex_model: Option<String>,
+    codex_model_fallback: bool,
+    codex_background_off: bool,
+    codex_cli_path: Option<String>,
     codex_month_summaries: HashMap<String, memory::MonthSummary>,
     nickname: String,
     updater_config: app_updater::UpdaterConfig,
@@ -1592,6 +1600,8 @@ fn export_backup(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<St
     store.password_hash = None;
     store.codex_conversation.clear();
     store.codex_conversation_summary = None;
+    store.codex_consent = false;
+    store.codex_cli_path = None;
     store.codex_month_summaries.clear();
     store.device_id.clear();
     store.sync_cursor = None;
@@ -2026,6 +2036,7 @@ pub fn run() {
             {
                 let _ = window.set_icon(icon);
             }
+            codex::set_cli_path(store.codex_cli_path.clone().map(PathBuf::from));
             app.manage(codex::Service::default());
             app.manage(embed::Vectors::default());
             app.manage(AppState {
@@ -2063,6 +2074,18 @@ pub fn run() {
             codex::codex_conversation,
             codex::codex_refresh_memory,
             codex::codex_memory_model,
+            codex::codex_memory_info,
+            codex::codex_memory_reset,
+            codex::codex_cancel,
+            codex::codex_retract_last,
+            codex::codex_clear_conversation,
+            codex::codex_prefs,
+            codex::codex_set_consent,
+            codex::codex_set_journal_excluded,
+            codex::codex_set_prefs,
+            codex::codex_models,
+            codex::codex_cli_info,
+            codex::codex_set_cli_path,
             bootstrap,
             unlock,
             lock,

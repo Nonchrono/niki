@@ -16,6 +16,15 @@ pub struct ConversationSummary {
     pub text: String,
 }
 
+/// A diary entry Niki looked up for an answer, shown to the user as a link.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SourceRef {
+    pub id: String,
+    pub journal_id: String,
+    pub date: String,
+    pub title: String,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct MonthSummary {
     pub signature: String,
@@ -523,6 +532,7 @@ fn full_cost(e: &Entry) -> usize {
 
 /// Layered context: monthly overviews and one-line notes for everything older, full text for
 /// entries matching the message, and full text for the most recent entries.
+#[cfg(test)]
 pub fn diary_context(
     store: &crate::Store,
     query: &str,
@@ -530,6 +540,17 @@ pub fn diary_context(
     plan: &[PlannedSearch],
     semantic: Option<&[(String, f32)]>,
 ) -> Value {
+    diary_context_with_sources(store, query, today, plan, semantic).0
+}
+
+/// `diary_context` plus the entries found by searching for the message, for the source links.
+pub fn diary_context_with_sources(
+    store: &crate::Store,
+    query: &str,
+    today: NaiveDate,
+    plan: &[PlannedSearch],
+    semantic: Option<&[(String, f32)]>,
+) -> (Value, Vec<SourceRef>) {
     let entries = &store.entries;
     let mut all = active(entries);
     all.sort_by(|a, b| {
@@ -614,7 +635,16 @@ pub fn diary_context(
     }
     notes.reverse();
 
-    json!({
+    let sources: Vec<SourceRef> = relevant
+        .iter()
+        .map(|e| SourceRef {
+            id: e.id.clone(),
+            journal_id: e.journal_id.clone(),
+            date: e.date.clone(),
+            title: e.title.clone(),
+        })
+        .collect();
+    let context = json!({
         "counts": {
             "total_entries": all.len(),
             "most_recent_entries_in_full": recent.len(),
@@ -626,7 +656,8 @@ pub fn diary_context(
         "older_entry_notes_oldest_to_newest": notes,
         "entries_matching_the_message": relevant.iter().map(|e| full_json(e)).collect::<Vec<_>>(),
         "most_recent_entries_oldest_to_newest": recent.iter().map(|e| full_json(e)).collect::<Vec<_>>()
-    })
+    });
+    (context, sources)
 }
 
 // ------------------------------------------------------------- retrieval planning
@@ -931,6 +962,23 @@ mod tests {
             ..crate::Store::default()
         };
         assert!(planner_prompt(&short, "예전 일", today).is_none());
+    }
+
+    #[test]
+    fn sources_list_the_searched_entries_with_their_journal() {
+        let mut list = vec![entry(1, "2024-07-10", "제주도 여행", "친구와 제주도 바닷가를 걸었다.")];
+        list[0].journal_id = "travel".into();
+        for i in 10..40 {
+            list.push(entry(i, &format!("2026-{:02}-{:02}", i % 10 + 1, i % 28 + 1), "평범", "그냥 평범한 하루"));
+        }
+        let store = crate::Store { entries: list, ..crate::Store::default() };
+        let (_, sources) = diary_context_with_sources(&store, "제주도 바닷가 이야기", day(2026, 11, 11), &[], None);
+        assert_eq!(
+            sources,
+            vec![SourceRef { id: "e1".into(), journal_id: "travel".into(), date: "2024-07-10".into(), title: "제주도 여행".into() }]
+        );
+        let (_, none) = diary_context_with_sources(&store, "안녕", day(2026, 11, 11), &[], None);
+        assert!(none.is_empty(), "no searched entries means no source links");
     }
 
     #[test]

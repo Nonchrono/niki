@@ -384,6 +384,15 @@ impl VectorIndex {
     }
 }
 
+#[derive(serde::Serialize)]
+pub struct SearchInfo {
+    pub model_installed: bool,
+    pub model_bytes: u64,
+    pub index_bytes: u64,
+    pub indexed_entries: usize,
+    pub total_entries: usize,
+}
+
 #[derive(Default)]
 struct Loaded {
     embedder: Option<Embedder>,
@@ -448,6 +457,44 @@ impl Vectors {
             (Some(embedder), Some(index)) => f(embedder, index),
             _ => Err("검색 색인을 사용할 수 없습니다".into()),
         }
+    }
+
+    /// What is stored on this device for search, for the settings screen.
+    pub fn info(&self, data_dir: &Path, entries: &[Entry]) -> SearchInfo {
+        let model_installed = installed(data_dir);
+        let dir = model_dir(data_dir);
+        let model_bytes: u64 = FILES
+            .iter()
+            .filter_map(|f| fs::metadata(dir.join(f.local)).ok())
+            .map(|m| m.len())
+            .sum();
+        let index_bytes = fs::metadata(index_path(data_dir)).map_or(0, |m| m.len());
+        let live = crate::memory::active(entries);
+        let indexed = self.loaded.lock().ok().map_or(0, |mut loaded| {
+            let index = loaded
+                .index
+                .get_or_insert_with(|| VectorIndex::load(&index_path(data_dir)));
+            live.iter()
+                .filter(|e| index.entries.get(&e.id).is_some_and(|i| i.updated_at == e.updated_at))
+                .count()
+        });
+        SearchInfo { model_installed, model_bytes, index_bytes, indexed_entries: indexed, total_entries: live.len() }
+    }
+
+    /// Deletes the search index, and with `model` the downloaded model too. The model is
+    /// fetched again automatically while a GPT account is connected.
+    pub fn reset(&self, data_dir: &Path, model: bool) -> Result<(), String> {
+        let mut loaded = self.loaded.lock().map_err(|_| "검색 색인을 사용할 수 없습니다")?;
+        *loaded = Loaded::default();
+        let _ = fs::remove_file(index_path(data_dir));
+        if model {
+            let _ = fs::remove_dir_all(model_dir(data_dir));
+            self.failed.store(false, Ordering::SeqCst);
+            if let Ok(mut last) = self.last_attempt.lock() {
+                *last = None;
+            }
+        }
+        Ok(())
     }
 
     /// Entries still waiting for vectors (0 when the model is not installed).
@@ -526,6 +573,29 @@ mod tests {
         assert!(long.len() > 1 && long.len() <= MAX_CHUNKS);
         assert!(long.iter().all(|c| c.chars().count() <= CHUNK_CHARS * 3 / 2 + 1));
         assert_eq!(chunks(&entry("c", &"가".repeat(10_000))).len(), MAX_CHUNKS);
+    }
+
+    #[test]
+    fn info_and_reset_report_and_delete_local_search_data() {
+        let data = std::env::temp_dir().join(format!("niki-info-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(model_dir(&data)).unwrap();
+        let list = vec![entry("a", "하나"), entry("b", "둘")];
+        let vectors = Vectors::default();
+        let before = vectors.info(&data, &list);
+        assert!(!before.model_installed && before.total_entries == 2 && before.indexed_entries == 0);
+        let mut index = VectorIndex::default();
+        index.entries.insert("a".into(), Indexed { updated_at: "v1".into(), vectors: vec![vec![0.0; DIM]] });
+        index.save(&index_path(&data)).unwrap();
+        let fresh = Vectors::default();
+        let info = fresh.info(&data, &list);
+        assert_eq!((info.indexed_entries, info.total_entries), (1, 2));
+        assert!(info.index_bytes > 0);
+        fresh.reset(&data, false).unwrap();
+        assert!(!index_path(&data).exists());
+        assert_eq!(fresh.info(&data, &list).indexed_entries, 0);
+        fresh.reset(&data, true).unwrap();
+        assert!(!model_dir(&data).exists());
+        fs::remove_dir_all(data).unwrap();
     }
 
     #[test]
