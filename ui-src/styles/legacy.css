@@ -35,6 +35,7 @@ select:hover{border-color:#b5cbb8;background-color:#f8fbf7}select option{color:#
 .codex-summary-title { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
 .codex-summary-head h3 { margin: 0 0 4px; font-size: 15px; }
 .codex-summary p, .codex-settings p { line-height: 1.65; }
+.codex-memory-status { margin: 0; padding: 8px 18px; border-bottom: 1px solid #e0e7df; background: #f6f9f4; color: #6b8570; font-size: 11px; line-height: 1.5; }
 .codex-conversation { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 16px; display: flex; flex-direction: column; gap: 24px; }
 .codex-conversation-empty { margin: auto; text-align: center; color: #7c927f; font-size: 13px; }
 .codex-conversation-empty svg { margin: 0 auto 12px; }

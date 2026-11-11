@@ -17,6 +17,7 @@ mod sync_merge;
 #[path = "archive/zip_read.rs"]
 mod zip_read;
 mod codex;
+mod memory;
 
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
@@ -144,6 +145,8 @@ impl Default for Template {
 struct Store {
     version: u32,
     codex_conversation: Vec<codex::ChatMessage>,
+    codex_entry_summaries: HashMap<String, memory::EntrySummary>,
+    codex_month_summaries: HashMap<String, memory::MonthSummary>,
     nickname: String,
     updater_config: app_updater::UpdaterConfig,
     journals: Vec<Journal>,
@@ -1587,6 +1590,8 @@ fn export_backup(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<St
     let mut store = state.store.lock().map_err(err)?.clone();
     store.password_hash = None;
     store.codex_conversation.clear();
+    store.codex_entry_summaries.clear();
+    store.codex_month_summaries.clear();
     store.device_id.clear();
     store.sync_cursor = None;
     store.last_sync_at = None;
@@ -2054,6 +2059,7 @@ pub fn run() {
             codex::codex_summarize,
             codex::codex_chat,
             codex::codex_conversation,
+            codex::codex_refresh_memory,
             bootstrap,
             unlock,
             lock,

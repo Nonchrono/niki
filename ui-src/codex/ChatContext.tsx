@@ -7,7 +7,7 @@ export type ChatMessage = { id: string; role: 'user' | 'assistant'; content: str
 type SummaryTarget = { entryId: string; title: string; disabled: boolean; prepare: () => Promise<string | null> };
 type ChatState = {
   connected: boolean; open: boolean; toggle: () => void; close: () => void;
-  messages: ChatMessage[]; pending: string; busy: boolean; error: string; ready: boolean;
+  messages: ChatMessage[]; organizing: boolean; pending: string; busy: boolean; error: string; ready: boolean;
   draft: string; setDraft: (value: string) => void; reload: () => Promise<void>;
   target: SummaryTarget | null; registerTarget: (target: SummaryTarget | null) => void;
   send: () => Promise<void>; summarize: () => Promise<void>;
@@ -26,6 +26,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState('');
   const [ready, setReady] = useState(false);
   const [target, registerTarget] = useState<SummaryTarget | null>(null);
+  const [organizing, setOrganizing] = useState(false);
+  const memory = useRef<Promise<void> | null>(null);
+  const stopMemory = useRef(false);
   const active = useRef(true);
   const running = useRef(false);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
@@ -37,11 +40,30 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     } catch (e) { if (active.current) { setReady(false); setError(errorMessage(e)); } }
   }, [run]);
   useEffect(() => { if (open && !ready) void reload(); }, [open, reload]);
+  // Summarize older diaries in the background so Niki can recall them; it yields to any message the user sends.
+  const organize = useCallback(() => {
+    if (memory.current) return;
+    stopMemory.current = false;
+    setOrganizing(true);
+    memory.current = (async () => {
+      try {
+        let previous = Infinity;
+        while (active.current && !stopMemory.current) {
+          const { remaining } = await run<{ remaining: number }>('codex_refresh_memory');
+          if (remaining === 0 || remaining >= previous) break;
+          previous = remaining;
+        }
+      } catch { /* organizing is best effort; chat still works from recent entries */ }
+      finally { memory.current = null; if (active.current) setOrganizing(false); }
+    })();
+  }, [run]);
+  useEffect(() => { if (open && ready && connected) organize(); }, [open, ready, connected, organize]);
   const request = async (summaryTarget?: SummaryTarget) => {
     const text = draft.trim();
     if (running.current || !connected || !ready || (!summaryTarget && !text)) return;
     running.current = true; setBusy(true); setError('');
     try {
+      if (memory.current) { stopMemory.current = true; await memory.current; }
       let args: Record<string, unknown>;
       if (summaryTarget) {
         const expectedUpdatedAt = await summaryTarget.prepare();
@@ -62,6 +84,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
   };
   return <Context.Provider value={{ connected, open, toggle: () => setOpen(value => !value), close: () => setOpen(false),
-    messages, pending, busy, error, ready, draft, setDraft, reload, target, registerTarget,
+    messages, organizing, pending, busy, error, ready, draft, setDraft, reload, target, registerTarget,
     send: () => request(), summarize: () => target ? request(target) : Promise.resolve() }}>{children}</Context.Provider>;
 }

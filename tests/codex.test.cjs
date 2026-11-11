@@ -13,7 +13,7 @@ const fs = require('node:fs');
     await page.route('https://**/*', route => route.abort());
     await page.addInitScript(() => {
       window.calls = []; window.failSave = false; window.deferSummary = false; window.failChat = false;
-      window.chatHistory = [];
+      window.chatHistory = []; window.memoryLeft = 0;
       window.codexStatus = { installed: true, connected: false, plan: null, login_pending: false };
       const entry = (id, title, body) => ({ id, journal_id: 'j1', title, body, date: '2026-11-10', created_at: 'v1', updated_at: 'v1', tags: [], favorite: false, location: '', weather: '', attachments: [], deleted_at: null });
       window.sample = {
@@ -42,6 +42,10 @@ const fs = require('node:fs');
           chatHistory.push({ id: `m${chatHistory.length}`, role: 'assistant', kind: 'summary', content: answer });
           return structuredClone(chatHistory);
         }
+        if (name === 'codex_refresh_memory') {
+          if (window.memoryLeft > 0) { window.memoryLeft -= 1; await new Promise(r => setTimeout(r, 120)); }
+          return { remaining: window.memoryLeft || 0 };
+        }
         if (name === 'codex_chat') {
           chatHistory.push({ id: `m${chatHistory.length}`, role: 'user', kind: 'chat', content: args.message });
           if (failChat) throw Error('연결을 확인하고 다시 시도해 주세요.');
@@ -67,7 +71,7 @@ const fs = require('node:fs');
     await page.evaluate(() => location.hash = '#/settings/codex');
     await page.locator('[data-action="codex-connect"]').click();
     assert.equal(await page.getByRole('heading', { name: 'GPT 계정 연결', exact: true }).count(), 1);
-    assert.equal(await page.getByText('요약할 일기, 그리고 Niki와 대화할 때는 삭제하지 않은 모든 일기의 제목과 본문이 OpenAI에 전송됩니다.', { exact: true }).count(), 1);
+    assert.equal(await page.getByText('요약할 일기, 그리고 Niki와 대화·기억 정리에 쓰이는 삭제하지 않은 일기의 제목과 본문이 OpenAI에 전송됩니다.', { exact: true }).count(), 1);
     assert.ok(!(await page.locator('#settings-detail').innerText()).includes('Niki의 로그인은'));
     await page.locator('.codex-device-code').waitFor();
     assert.equal(await page.locator('.codex-device-code').innerText(), 'DEMO-CODE');
@@ -128,7 +132,15 @@ const fs = require('node:fs');
     assert.equal(await editorWidth(), widthOpen, 'opening the panel must not change diary layout');
     assert.equal(await page.locator('[data-action="open-summary"] svg path').count(), 3, 'AI toggle has three stars');
     assert.equal(await page.locator('[data-action="open-summary"]').innerText(), '');
+    const refreshCalls = () => page.evaluate(() => calls.filter(c => c.name === 'codex_refresh_memory').length);
+    const refreshBase = await refreshCalls();
+    await page.evaluate(() => { memoryLeft = 3; });
     await page.locator('[data-action="open-summary"]').click();
+    await page.locator('.codex-memory-status').waitFor();
+    await page.waitForFunction(base => calls.filter(c => c.name === 'codex_refresh_memory').length >= base + 3, refreshBase);
+    await page.locator('.codex-memory-status').waitFor({ state: 'detached' });
+    assert.equal(await refreshCalls(), refreshBase + 3, 'background memory building stops once nothing is left');
+    assert.equal(await page.evaluate(() => calls.filter(c => c.name === 'codex_chat').length), 0);
     assert.equal(await page.locator('[data-testid="codex-summary-result"]').count(), 1, 'reopening retains summary');
     await page.getByRole('textbox', { name: 'Niki에게 메시지', exact: true }).fill('이 이야기를 더 해 볼까?');
     await page.getByRole('button', { name: '대화 닫기', exact: true }).click();
@@ -137,6 +149,15 @@ const fs = require('node:fs');
     await page.getByRole('button', { name: '메시지 보내기' }).click();
     await page.locator('[data-testid="codex-chat-result"]').waitFor();
     assert.deepEqual(await page.evaluate(() => calls.find(c => c.name === 'codex_chat').args), { message: '이 이야기를 더 해 볼까?' }, 'chat does not silently transmit the current diary');
+    const interruptBase = await refreshCalls();
+    await page.evaluate(() => { memoryLeft = 8; });
+    await page.getByRole('button', { name: '대화 닫기', exact: true }).click();
+    await page.locator('[data-action="open-summary"]').click();
+    await page.locator('.codex-memory-status').waitFor();
+    await page.getByRole('textbox', { name: 'Niki에게 메시지', exact: true }).fill('정리 중에 보내는 메시지');
+    await page.getByRole('button', { name: '메시지 보내기' }).click();
+    await page.waitForFunction(() => calls.filter(c => c.name === 'codex_chat').length >= 2);
+    assert.ok(await refreshCalls() - interruptBase < 8, 'sending a message interrupts background memory building');
     await page.evaluate(() => { failSave = true; });
     await page.locator('#entry-title').fill('충돌한 편집');
     await page.locator('[data-action="codex-summarize"]').click();

@@ -2436,6 +2436,15 @@
   .codex-summary p, .codex-settings p {
     line-height: 1.65;
   }
+  .codex-memory-status {
+    margin: 0;
+    padding: 8px 18px;
+    border-bottom: 1px solid #e0e7df;
+    background: #f6f9f4;
+    color: #6b8570;
+    font-size: 11px;
+    line-height: 1.5;
+  }
   .codex-conversation {
     flex: 1;
     min-height: 0;
