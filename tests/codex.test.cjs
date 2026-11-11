@@ -13,7 +13,7 @@ const fs = require('node:fs');
     await page.route('https://**/*', route => route.abort());
     await page.addInitScript(() => {
       window.calls = []; window.failSave = false; window.deferSummary = false; window.failChat = false;
-      window.chatHistory = []; window.memoryLeft = 0; window.memoryModel = { installed: true, downloading: false, downloaded_bytes: 0, total_bytes: 111821878 };
+      window.chatHistory = []; window.memoryLeft = 0; window.memoryModel = { installed: true, downloading: false, failed: false, downloaded_bytes: 0, total_bytes: 111821878 };
       window.codexStatus = { installed: true, connected: false, plan: null, login_pending: false };
       const entry = (id, title, body) => ({ id, journal_id: 'j1', title, body, date: '2026-11-10', created_at: 'v1', updated_at: 'v1', tags: [], favorite: false, location: '', weather: '', attachments: [], deleted_at: null });
       window.sample = {
@@ -43,17 +43,12 @@ const fs = require('node:fs');
           return structuredClone(chatHistory);
         }
         if (name === 'codex_memory_model') return structuredClone(memoryModel);
-        if (name === 'codex_download_memory_model') {
-          memoryModel.downloading = true; memoryModel.downloaded_bytes = 50000000;
-          await new Promise(r => setTimeout(r, 1200));
-          Object.assign(memoryModel, { installed: true, downloading: false, downloaded_bytes: memoryModel.total_bytes });
-          return structuredClone(memoryModel);
-        }
         if (name === 'codex_refresh_memory') {
           if (window.memoryLeft > 0) { window.memoryLeft -= 1; await new Promise(r => setTimeout(r, 120)); }
           return { remaining: window.memoryLeft || 0 };
         }
         if (name === 'codex_chat') {
+          window.memoryLeftAtChat = window.memoryLeft;
           chatHistory.push({ id: `m${chatHistory.length}`, role: 'user', kind: 'chat', content: args.message });
           if (failChat) throw Error('연결을 확인하고 다시 시도해 주세요.');
           chatHistory.push({ id: `m${chatHistory.length}`, role: 'assistant', kind: 'chat', content: '산책 이야기를 이어가 볼까요?' });
@@ -164,20 +159,28 @@ const fs = require('node:fs');
     await page.getByRole('textbox', { name: 'Niki에게 메시지', exact: true }).fill('정리 중에 보내는 메시지');
     await page.getByRole('button', { name: '메시지 보내기' }).click();
     await page.waitForFunction(() => calls.filter(c => c.name === 'codex_chat').length >= 2);
-    assert.ok(await refreshCalls() - interruptBase < 8, 'sending a message interrupts background memory building');
+    assert.ok(await page.evaluate(() => memoryLeftAtChat > 0), 'sending a message interrupts background memory building instead of waiting for it to finish');
+    assert.ok(interruptBase >= 0);
     const afterReply = await refreshCalls();
     await page.waitForFunction(base => calls.filter(c => c.name === 'codex_refresh_memory').length > base, afterReply);
     assert.ok(true, 'memory building resumes after a reply');
-    // Search model offer: shown only when missing, downloaded only on request, with progress.
-    assert.equal(await page.locator('[data-action="download-memory-model"]').count(), 0, 'no offer once installed');
-    await page.evaluate(() => Object.assign(memoryModel, { installed: false, downloading: false, downloaded_bytes: 0 }));
+    // The search model arrives automatically: no button, only progress while it downloads.
+    assert.equal(await page.getByRole('button', { name: /검색 모델/ }).count(), 0, 'no download button');
+    assert.equal(await page.locator('[data-testid="memory-model-status"]').count(), 0, 'nothing shown once installed');
+    await page.evaluate(() => Object.assign(memoryModel, { installed: false, downloading: true, downloaded_bytes: 55910939 }));
     await page.getByRole('button', { name: '대화 닫기', exact: true }).click();
     await page.locator('[data-action="open-summary"]').click();
-    await page.locator('[data-action="download-memory-model"]').waitFor();
-    assert.equal(await page.evaluate(() => calls.filter(c => c.name === 'codex_download_memory_model').length), 0, 'never downloaded without a click');
-    await page.locator('[data-action="download-memory-model"]').click();
-    await page.getByText('검색 모델을 받는 중이에요', { exact: false }).waitFor();
-    await page.locator('.codex-model-offer').waitFor({ state: 'detached' });
+    await page.getByText('일기 검색을 준비하고 있어요… 50%', { exact: true }).waitFor();
+    const beforeInstall = await refreshCalls();
+    await page.evaluate(() => Object.assign(memoryModel, { installed: true, downloading: false, downloaded_bytes: memoryModel.total_bytes }));
+    await page.locator('[data-testid="memory-model-status"]').waitFor({ state: 'detached' });
+    await page.waitForFunction(base => calls.filter(c => c.name === 'codex_refresh_memory').length > base, beforeInstall);
+    await page.evaluate(() => Object.assign(memoryModel, { installed: false, downloading: false, failed: true }));
+    await page.getByRole('button', { name: '대화 닫기', exact: true }).click();
+    await page.locator('[data-action="open-summary"]').click();
+    await page.getByText('지금은 단어로 일기를 찾아요', { exact: false }).waitFor();
+    await page.evaluate(() => Object.assign(memoryModel, { installed: true, failed: false }));
+    await page.locator('[data-testid="memory-model-status"]').waitFor({ state: 'detached' });
     await page.evaluate(() => { failSave = true; });
     await page.locator('#entry-title').fill('충돌한 편집');
     await page.locator('[data-action="codex-summarize"]').click();

@@ -858,48 +858,26 @@ pub(crate) async fn codex_refresh_memory(
 pub struct MemoryModel {
     pub installed: bool,
     pub downloading: bool,
+    pub failed: bool,
     pub downloaded_bytes: u64,
     pub total_bytes: u64,
 }
 
-fn memory_model_status(data_dir: &Path, vectors: &crate::embed::Vectors) -> MemoryModel {
-    MemoryModel {
-        installed: crate::embed::installed(data_dir),
-        downloading: vectors.downloading.load(Ordering::SeqCst),
-        downloaded_bytes: vectors.progress.load(Ordering::SeqCst),
-        total_bytes: crate::embed::total_download_bytes(),
-    }
-}
-
+/// Search-model status for the chat panel. Also retries a failed automatic download.
 #[tauri::command]
 pub(crate) fn codex_memory_model(
     state: tauri::State<'_, crate::AppState>,
     vectors: tauri::State<'_, crate::embed::Vectors>,
 ) -> Result<MemoryModel, String> {
     crate::ensure_unlocked(&state)?;
-    Ok(memory_model_status(&state.data_dir, &vectors))
-}
-
-/// Downloads the on-device search model (about 135 MB, pinned and checksum-verified).
-/// Only the model is fetched; no diary data is sent.
-#[tauri::command]
-pub(crate) async fn codex_download_memory_model(
-    state: tauri::State<'_, crate::AppState>,
-    vectors: tauri::State<'_, crate::embed::Vectors>,
-) -> Result<MemoryModel, String> {
-    crate::ensure_unlocked(&state)?;
-    let vectors = vectors.inner().clone();
-    if vectors.downloading.swap(true, Ordering::SeqCst) {
-        return Err("이미 검색 모델을 내려받는 중입니다".into());
-    }
-    let (dir, v) = (state.data_dir.clone(), vectors.clone());
-    let result = tauri::async_runtime::spawn_blocking(move || crate::embed::download(&dir, &v.progress))
-        .await
-        .map_err(|_| "검색 모델을 내려받지 못했습니다".to_string())
-        .and_then(|r| r);
-    vectors.downloading.store(false, Ordering::SeqCst);
-    result?;
-    Ok(memory_model_status(&state.data_dir, &vectors))
+    vectors.ensure_model(&state.data_dir);
+    Ok(MemoryModel {
+        installed: crate::embed::installed(&state.data_dir),
+        downloading: vectors.downloading.load(Ordering::SeqCst),
+        failed: vectors.failed.load(Ordering::SeqCst),
+        downloaded_bytes: vectors.progress.load(Ordering::SeqCst),
+        total_bytes: crate::embed::total_download_bytes(),
+    })
 }
 
 #[cfg(test)]

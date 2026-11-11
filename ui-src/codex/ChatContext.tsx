@@ -4,7 +4,7 @@ import { errorMessage } from '../lib/format';
 import { useGptConnection } from './useGptConnection';
 
 export type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string; kind: 'chat' | 'summary' };
-export type MemoryModel = { installed: boolean; downloading: boolean; downloaded_bytes: number; total_bytes: number };
+export type MemoryModel = { installed: boolean; downloading: boolean; failed: boolean; downloaded_bytes: number; total_bytes: number };
 type SummaryTarget = { entryId: string; title: string; disabled: boolean; prepare: () => Promise<string | null> };
 type ChatState = {
   connected: boolean; open: boolean; toggle: () => void; close: () => void;
@@ -12,7 +12,7 @@ type ChatState = {
   draft: string; setDraft: (value: string) => void; reload: () => Promise<void>;
   target: SummaryTarget | null; registerTarget: (target: SummaryTarget | null) => void;
   send: () => Promise<void>; summarize: () => Promise<void>;
-  model: MemoryModel | null; modelError: string; downloadModel: () => Promise<void>;
+  model: MemoryModel | null;
 };
 const Context = createContext<ChatState | null>(null);
 export const useChat = () => { const value = useContext(Context); if (!value) throw Error('Missing ChatProvider'); return value; };
@@ -30,7 +30,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [target, registerTarget] = useState<SummaryTarget | null>(null);
   const [organizing, setOrganizing] = useState(false);
   const [model, setModel] = useState<MemoryModel | null>(null);
-  const [modelError, setModelError] = useState('');
   const memory = useRef<Promise<void> | null>(null);
   const stopMemory = useRef(false);
   const active = useRef(true);
@@ -67,20 +66,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     catch { return null; }
   }, [run]);
   useEffect(() => { if (open && connected) void checkModel(); }, [open, connected, checkModel]);
-  // The on-device search model is fetched only when the user asks for it.
-  const downloadModel = useCallback(async () => {
-    setModelError('');
-    const poll = setInterval(() => { void checkModel(); }, 500);
-    try {
-      const next = await run<MemoryModel>('codex_download_memory_model');
-      if (active.current) { setModel(next); organize(); }
-    } catch (e) {
-      if (active.current) setModelError(errorMessage(e));
-    } finally {
-      clearInterval(poll);
-      await checkModel();
-    }
-  }, [run, checkModel, organize]);
+  // The app fetches the search model by itself; while it is missing, follow progress and start
+  // indexing as soon as it lands.
+  const waitingForModel = open && connected && !!model && !model.installed;
+  useEffect(() => {
+    if (!waitingForModel) return;
+    const timer = setInterval(() => {
+      void checkModel().then(next => { if (next?.installed && active.current) organize(); });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [waitingForModel, checkModel, organize]);
   const request = async (summaryTarget?: SummaryTarget) => {
     const text = draft.trim();
     if (running.current || !connected || !ready || (!summaryTarget && !text)) return;
@@ -111,5 +106,5 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   return <Context.Provider value={{ connected, open, toggle: () => setOpen(value => !value), close: () => setOpen(false),
     messages, organizing, pending, busy, error, ready, draft, setDraft, reload, target, registerTarget,
     send: () => request(), summarize: () => target ? request(target) : Promise.resolve(),
-    model, modelError, downloadModel }}>{children}</Context.Provider>;
+    model }}>{children}</Context.Provider>;
 }

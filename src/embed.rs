@@ -390,15 +390,47 @@ struct Loaded {
     index: Option<VectorIndex>,
 }
 
+/// After a failed download, wait this long before trying again.
+const RETRY_AFTER: Duration = Duration::from_secs(60);
+
+fn should_retry(last_attempt: Option<std::time::Instant>) -> bool {
+    last_attempt.is_none_or(|at| at.elapsed() >= RETRY_AFTER)
+}
+
 /// Shared embedding state: the loaded model, the vector index and download progress.
 #[derive(Clone, Default)]
 pub struct Vectors {
     loaded: Arc<Mutex<Loaded>>,
     pub downloading: Arc<AtomicBool>,
     pub progress: Arc<AtomicU64>,
+    pub failed: Arc<AtomicBool>,
+    last_attempt: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
 impl Vectors {
+    /// Fetches the model in the background when it is missing, like part of installing the
+    /// app: at startup, and again (at most once a minute) while the chat panel is open if an
+    /// earlier attempt failed. The model is kept across app updates, so this happens once.
+    pub fn ensure_model(&self, data_dir: &Path) {
+        if installed(data_dir) {
+            return;
+        }
+        let Ok(mut last) = self.last_attempt.lock() else {
+            return;
+        };
+        if !should_retry(*last) || self.downloading.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        *last = Some(std::time::Instant::now());
+        drop(last);
+        let (vectors, dir) = (self.clone(), data_dir.to_path_buf());
+        std::thread::spawn(move || {
+            let ok = download(&dir, &vectors.progress).is_ok();
+            vectors.failed.store(!ok, Ordering::SeqCst);
+            vectors.downloading.store(false, Ordering::SeqCst);
+        });
+    }
+
     fn with<T>(
         &self,
         data_dir: &Path,
@@ -494,6 +526,16 @@ mod tests {
         assert!(long.len() > 1 && long.len() <= MAX_CHUNKS);
         assert!(long.iter().all(|c| c.chars().count() <= CHUNK_CHARS * 3 / 2 + 1));
         assert_eq!(chunks(&entry("c", &"가".repeat(10_000))).len(), MAX_CHUNKS);
+    }
+
+    #[test]
+    fn failed_downloads_retry_at_most_once_a_minute() {
+        assert!(should_retry(None));
+        assert!(!should_retry(Some(std::time::Instant::now())));
+        let long_ago = std::time::Instant::now().checked_sub(RETRY_AFTER + Duration::from_secs(1));
+        if let Some(at) = long_ago {
+            assert!(should_retry(Some(at)));
+        }
     }
 
     #[test]

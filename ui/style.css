@@ -2445,15 +2445,6 @@
     font-size: 11px;
     line-height: 1.5;
   }
-  .codex-model-offer {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-  }
-  .codex-model-offer p {
-    margin: 0;
-  }
   .codex-conversation {
     flex: 1;
     min-height: 0;
