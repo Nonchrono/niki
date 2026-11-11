@@ -12,13 +12,14 @@ const fs = require('node:fs');
     page.on('pageerror', e => errors.push(e.message));
     await page.route('https://**/*', route => route.abort());
     await page.addInitScript(() => {
-      window.calls = []; window.failSave = false; window.deferSummary = false;
+      window.calls = []; window.failSave = false; window.deferSummary = false; window.failChat = false;
+      window.chatHistory = [];
       window.codexStatus = { installed: true, connected: false, plan: null, login_pending: false };
       const entry = (id, title, body) => ({ id, journal_id: 'j1', title, body, date: '2026-11-10', created_at: 'v1', updated_at: 'v1', tags: [], favorite: false, location: '', weather: '', attachments: [], deleted_at: null });
       window.sample = {
         locked: false, nickname: '나', app_version: '0.1.22', updater_config: {},
-        journals: [{ id: 'j1', name: '매일 일기', color: '#576b61' }],
-        entries: [entry('e1', '산책', '공원에서 산책했다.'), entry('e2', '다른 일기', '다른 비공개 내용')],
+        journals: [{ id: 'j1', name: '매일 일기', color: '#576b61' }, { id: 'j2', name: '여행 일기', color: '#576b61' }],
+        entries: [entry('e1', '산책', '공원에서 산책했다.'), { ...entry('e2', '다른 일기', '다른 비공개 내용'), journal_id: 'j2' }],
         templates: [], sync_conflicts: [], pending_resolution_count: 0, synced_entry_ids: [],
         sync_status: { connected: false, sync_paused: false, pending_upload_count: 0 },
       };
@@ -26,6 +27,7 @@ const fs = require('node:fs');
         calls.push({ name, args });
         if (name === 'bootstrap') return structuredClone(sample);
         if (name === 'codex_status') return structuredClone(codexStatus);
+        if (name === 'codex_conversation') return structuredClone(chatHistory);
         if (name === 'codex_connect') { codexStatus.login_pending = true; return { verification_url: 'https://auth.openai.com/codex/device', user_code: 'DEMO-CODE' }; }
         if (name === 'codex_disconnect') { Object.assign(codexStatus, { connected: false, plan: null, login_pending: false }); return; }
         if (name === 'save_entry_checked') {
@@ -35,8 +37,16 @@ const fs = require('node:fs');
           return { id: current.id, entry: structuredClone(current) };
         }
         if (name === 'codex_summarize') {
-          if (deferSummary) return new Promise(resolve => { window.completeSummary = resolve; });
-          return '<script>window.injected = true</script> 산책하며 편안한 하루를 보냈다.';
+          chatHistory.push({ id: `m${chatHistory.length}`, role: 'user', kind: 'summary', content: `「${sample.entries.find(e => e.id === args.entryId).title}」 요약해 줘` });
+          const answer = deferSummary ? await new Promise(resolve => { window.completeSummary = resolve; }) : '<script>window.injected = true</script> 산책하며 편안한 하루를 보냈다.';
+          chatHistory.push({ id: `m${chatHistory.length}`, role: 'assistant', kind: 'summary', content: answer });
+          return structuredClone(chatHistory);
+        }
+        if (name === 'codex_chat') {
+          chatHistory.push({ id: `m${chatHistory.length}`, role: 'user', kind: 'chat', content: args.message });
+          if (failChat) throw Error('연결을 확인하고 다시 시도해 주세요.');
+          chatHistory.push({ id: `m${chatHistory.length}`, role: 'assistant', kind: 'chat', content: '산책 이야기를 이어가 볼까요?' });
+          return structuredClone(chatHistory);
         }
         throw Error(`Unexpected command: ${name}`);
       } } };
@@ -68,7 +78,13 @@ const fs = require('node:fs');
     await page.evaluate(() => location.hash = '#/all/entries/e1');
     await page.locator('[data-action="open-summary"]').click();
     await page.locator('[data-action="codex-summarize"]').waitFor();
-    assert.equal(await page.locator('#diary-summary-sidebar input, #diary-summary-sidebar textarea').count(), 0, 'sidebar currently shows summaries only');
+    assert.equal(await page.locator('#diary-summary-sidebar input').count(), 1);
+    assert.equal(await page.locator('#diary-summary-sidebar h3').innerText(), 'Niki와 대화');
+    assert.equal(await page.locator('[data-action="open-summary"] svg path').count(), 3, 'AI toggle has three stars');
+    assert.equal(await page.locator('[data-action="open-summary"]').innerText(), '');
+    assert.equal(await page.locator('.codex-summary-head [data-action="codex-summarize"]').count(), 1);
+    assert.ok(!(await page.locator('#diary-summary-sidebar').innerText()).includes('GPT-6 Luna'));
+    assert.equal(await page.getByRole('button', { name: '요약하기', exact: true }).count(), 0);
     assert.ok(!(await page.locator('#diary-summary-sidebar').innerText()).includes('OpenAI에 보냅니다'));
     assert.equal(await page.evaluate(() => calls.filter(c => c.name === 'codex_summarize').length), 0, 'opening panel must not send diary content');
     await page.locator('#entry-title').fill('산책과 독서');
@@ -97,23 +113,55 @@ const fs = require('node:fs');
     await page.setViewportSize({ width: 900, height: 650 });
     await checkSidebar();
     await page.screenshot({ path: 'output/codex-ui/summary-narrow.png' });
-    await page.getByRole('button', { name: '요약 닫기', exact: true }).click();
+    await page.getByRole('button', { name: '대화 닫기', exact: true }).click();
     assert.ok(await page.locator('.list-pane').isVisible(), 'closing summary restores diary list');
     await page.locator('[data-action="open-summary"]').click();
+    assert.equal(await page.locator('[data-testid="codex-summary-result"]').count(), 1, 'reopening retains summary');
+    await page.getByRole('textbox', { name: 'Niki에게 메시지', exact: true }).fill('이 이야기를 더 해 볼까?');
+    await page.locator('[data-action="open-summary"]').click();
+    await page.locator('[data-action="open-summary"]').click();
+    assert.equal(await page.getByRole('textbox', { name: 'Niki에게 메시지', exact: true }).inputValue(), '이 이야기를 더 해 볼까?', 'closing retains draft');
+    await page.getByRole('button', { name: '메시지 보내기' }).click();
+    await page.locator('[data-testid="codex-chat-result"]').waitFor();
+    assert.deepEqual(await page.evaluate(() => calls.find(c => c.name === 'codex_chat').args), { message: '이 이야기를 더 해 볼까?' }, 'chat does not silently transmit the current diary');
     await page.evaluate(() => { failSave = true; });
     await page.locator('#entry-title').fill('충돌한 편집');
     await page.locator('[data-action="codex-summarize"]').click();
     await page.waitForFunction(() => calls.filter(c => c.name === 'save_entry_checked').length >= 2);
     assert.equal(await page.evaluate(() => calls.filter(c => c.name === 'codex_summarize').length), 1, 'failed save must block transmission');
     await page.evaluate(() => { failSave = false; deferSummary = true; });
+    await page.locator('#entry-title').fill('저장 충돌 해결');
+    await page.waitForFunction(() => sample.entries[0].title === '저장 충돌 해결');
     await page.locator('[data-action="codex-summarize"]').click();
     await page.waitForFunction(() => typeof completeSummary === 'function');
-    await page.evaluate(() => location.hash = '#/all/entries/e2');
-    await page.locator('#entry-title').waitFor();
+    await page.getByRole('button', { name: '대화 닫기', exact: true }).click();
+    await page.evaluate(() => location.hash = '#/journals/j2/entries/e2');
+    await page.waitForFunction(() => document.querySelector('#entry-title')?.value === '다른 일기');
     await page.evaluate(() => completeSummary('첫 일기 전용 요약'));
     await page.locator('[data-action="open-summary"]').click();
-    await page.locator('[data-action="codex-summarize"]').waitFor();
-    assert.equal(await page.locator('[data-testid="codex-summary-result"]').count(), 0, 'late summary must not leak into another diary');
+    await page.getByText('첫 일기 전용 요약', { exact: true }).waitFor();
+    assert.equal(await page.locator('[data-testid="codex-summary-result"]').count(), 2, 'late summary is retained in shared conversation across journals');
+    await page.evaluate(() => { deferSummary = false; });
+    await page.locator('[data-action="codex-summarize"]').click();
+    await page.waitForFunction(() => chatHistory.filter(m => m.kind === 'summary' && m.role === 'assistant').length === 3);
+    assert.equal(await page.evaluate(() => calls.filter(c => c.name === 'codex_summarize').at(-1).args.entryId), 'e2', 'summary targets the currently open diary');
+    await page.evaluate(() => { failChat = true; });
+    await page.getByRole('textbox', { name: 'Niki에게 메시지', exact: true }).fill('전송 오류 테스트');
+    await page.getByRole('button', { name: '메시지 보내기' }).click();
+    await page.locator('#diary-summary-sidebar [role="alert"]').waitFor();
+    assert.equal(await page.getByRole('textbox', { name: 'Niki에게 메시지', exact: true }).inputValue(), '전송 오류 테스트');
+    assert.equal(await page.locator('[data-testid="codex-summary-result"]').count(), 3, 'failure retains existing history');
+    const savedHistory = await page.evaluate(() => chatHistory);
+    await page.addInitScript(history => { window.chatHistory = history; window.codexStatus.connected = true; }, savedHistory);
+    await page.reload();
+    await page.locator('[data-action="open-summary"]').click();
+    await page.getByText('첫 일기 전용 요약', { exact: true }).waitFor();
+    assert.equal(await page.locator('[data-testid="codex-summary-result"]').count(), 3, 'reload restores backend history');
+    await page.evaluate(() => location.hash = '#/calendar');
+    await page.locator('.calendar').waitFor();
+    assert.equal(await page.locator('[data-testid="codex-summary-result"]').count(), 3, 'navigation retains global conversation');
+    assert.ok(await page.locator('[data-action="codex-summarize"]').isDisabled(), 'summary requires an open diary');
+    await page.locator('[data-action="open-summary"]').click();
     await page.evaluate(() => location.hash = '#/settings/codex');
     await page.locator('[data-action="codex-disconnect"]').click();
     await page.locator('[data-action="codex-connect"]').waitFor();
@@ -121,6 +169,6 @@ const fs = require('node:fs');
     await page.locator('#entry-title').waitFor();
     assert.equal(await page.locator('[data-action="open-summary"]').count(), 0);
     assert.deepEqual(errors, []);
-    console.log('Codex login, explicit consent, saved selection, conflicts, text-only output, privacy and responsive UI tests passed');
+    console.log('Codex login, shared persistent chat, current-diary summaries, save conflicts, text-only output and responsive UI tests passed');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

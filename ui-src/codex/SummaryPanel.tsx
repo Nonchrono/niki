@@ -1,39 +1,39 @@
 import { useEffect, useRef, useState } from 'react';
-import { MessageSquare, X } from 'lucide-react';
-import { useApp } from '../app/AppContext';
+import { ArrowUp, MessageSquare, X } from 'lucide-react';
 import { Button } from '../components/ui/button';
-import { errorMessage } from '../lib/format';
+import { Input } from '../components/ui/input';
+import { useChat } from './ChatContext';
 
-export function SummaryPanel({ entryId, prepare, onClose }: { entryId: string; prepare: () => Promise<string | null>; onClose: () => void }) {
-  const { run } = useApp();
-  const active = useRef(true);
-  const [busy, setBusy] = useState(false);
-  const [summary, setSummary] = useState('');
-  const [error, setError] = useState('');
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    active.current = true;
-    return () => { active.current = false; };
-  }, [run]);
-  const summarize = async () => {
-    setBusy(true); setError(''); setSummary(''); setCopied(false);
-    try {
-      const expectedUpdatedAt = await prepare();
-      if (!expectedUpdatedAt || !active.current) return;
-      const result = await run<string>('codex_summarize', { entryId, expectedUpdatedAt });
-      if (active.current) setSummary(result);
-    } catch (e) { if (active.current) setError(errorMessage(e)); }
-    finally { if (active.current) setBusy(false); }
-  };
-  return <aside className="codex-summary" id="diary-summary-sidebar" aria-label="선택한 일기 요약">
-    <div className="codex-summary-head"><div><h3>일기 요약</h3><span className="subtle">GPT-6 Luna</span></div><Button variant="ghost" size="icon-sm" aria-label="요약 닫기" onClick={onClose}><X size={17} /></Button></div>
-    <div className="codex-conversation" role="log" aria-label="요약 대화" aria-live="polite" aria-busy={busy}>
-      {!busy && !summary && !error && <div className="codex-conversation-empty"><MessageSquare size={25} strokeWidth={1.4} /><p>일기의 이야기를<br />짧게 정리해 보세요.</p></div>}
-      {(busy || summary) && <div className="codex-request-bubble">이 일기를 요약해 줘.</div>}
-      {busy && <div className="codex-response"><span className="codex-speaker">GPT</span><p role="status" className="codex-summary-text">일기를 읽고 있어요…</p></div>}
-      {summary && <div className="codex-response"><span className="codex-speaker">GPT</span><p className="codex-summary-text" data-testid="codex-summary-result">{summary}</p><Button variant="ghost" size="xs" onClick={() => void navigator.clipboard.writeText(summary).then(() => setCopied(true)).catch(() => setError('요약을 복사하지 못했습니다'))}>{copied ? '복사됨' : '요약 복사'}</Button></div>}
-      {error && <p role="alert" className="sync-error">{error}</p>}
+export function SummaryPanel() {
+  const { close, messages, pending, busy, error, ready, draft, setDraft, send, summarize, target, reload } = useChat();
+  const conversation = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState('');
+  const [copyError, setCopyError] = useState('');
+  useEffect(() => { conversation.current?.scrollTo({ top: conversation.current.scrollHeight }); }, [messages, pending, busy, error]);
+  return <aside className="codex-summary" id="diary-summary-sidebar" aria-label="Niki와 대화">
+    <div className="codex-summary-head">
+      <div className="codex-summary-title"><h3>Niki와 대화</h3>
+        <Button variant="outline" size="xs" data-action="codex-summarize" disabled={busy || !ready || !target || target.disabled}
+          title={target ? '현재 열려 있는 일기 요약' : '요약할 일기를 먼저 열어 주세요'} onClick={() => void summarize()}>요약</Button>
+      </div>
+      <Button variant="ghost" size="icon-sm" aria-label="대화 닫기" onClick={close}><X size={17} /></Button>
     </div>
-    <div className="codex-summary-actions"><Button disabled={busy} data-action="codex-summarize" onClick={() => void summarize()}>{busy ? '요약 중…' : summary ? '다시 요약하기' : '요약하기'}</Button></div>
+    <div ref={conversation} className="codex-conversation" role="log" aria-label="Niki 대화" aria-live="polite" aria-busy={busy}>
+      {!ready && !error && <p role="status">대화를 불러오는 중…</p>}
+      {ready && !busy && !messages.length && <div className="codex-conversation-empty"><MessageSquare size={25} strokeWidth={1.4} /><p>Niki에게 이야기를 들려주세요.<br />열려 있는 일기를 요약할 수도 있어요.</p></div>}
+      {messages.map(message => message.role === 'user'
+        ? <div key={message.id} className="codex-request-bubble">{message.content}</div>
+        : <div key={message.id} className="codex-response"><span className="codex-speaker">Niki</span><p className="codex-summary-text" data-testid={message.kind === 'summary' ? 'codex-summary-result' : 'codex-chat-result'}>{message.content}</p>
+          <Button variant="ghost" size="xs" onClick={() => void navigator.clipboard.writeText(message.content).then(() => { setCopied(message.id); setCopyError(''); }).catch(() => setCopyError('대화를 복사하지 못했습니다.'))}>{copied === message.id ? '복사됨' : '복사'}</Button></div>)}
+      {pending && <div className="codex-request-bubble">{pending}</div>}
+      {busy && <div className="codex-response"><span className="codex-speaker">Niki</span><p role="status" className="codex-summary-text">생각하고 있어요…</p></div>}
+      {(error || copyError) && <p role="alert" className="sync-error">{error || copyError}</p>}
+      {!ready && error && <Button variant="outline" size="sm" onClick={() => void reload()}>대화 다시 불러오기</Button>}
+    </div>
+    <form className="codex-chat-composer" onSubmit={event => { event.preventDefault(); void send(); }}>
+      <Input aria-label="Niki에게 메시지" placeholder="Niki에게 메시지 보내기" value={draft} maxLength={6000} disabled={busy}
+        onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault(); }} />
+      <Button type="submit" size="icon-sm" aria-label="메시지 보내기" disabled={busy || !ready || !draft.trim()}><ArrowUp size={17} /></Button>
+    </form>
   </aside>;
 }

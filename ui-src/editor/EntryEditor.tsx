@@ -12,8 +12,8 @@ import { ConflictPanel } from './ConflictPanel';
 import { DatePicker } from './DatePicker';
 import { TiptapEditor, type TiptapEditorHandle } from './TiptapEditor';
 import { needsSourceEditor } from './markdown';
-import { SummaryPanel } from '../codex/SummaryPanel';
-import { useGptConnection } from '../codex/useGptConnection';
+import { useChat } from '../codex/ChatContext';
+import { ChatToggle } from '../codex/ChatToggle';
 
 type Fields = Pick<EntryInput, 'title' | 'date' | 'journalId' | 'favorite' | 'tags' | 'location' | 'weather'>;
 const fieldsFrom = (entry: Entry): Fields => ({ title: entry.title, date: entry.date, journalId: entry.journal_id, favorite: entry.favorite, tags: entry.tags, location: entry.location, weather: entry.weather });
@@ -43,9 +43,7 @@ export function EntryEditor({ entry }: { entry: Entry }) {
   const [status, setStatus] = useState(seed.restored ? '저장 대기 중…' : '모든 변경 사항 저장됨');
   const [conflict, setConflict] = useState(false);
   const [menu, setMenu] = useState(false);
-  const [summaryOpen, setSummaryOpen] = useState(false);
-  const gptConnected = useGptConnection();
-  useEffect(() => { if (!gptConnected) setSummaryOpen(false); }, [gptConnected]);
+  const { registerTarget } = useChat();
   const [attachments, setAttachments] = useState(entry.attachments);
   const [uploading, setUploading] = useState(false);
   const attachInput = useRef<HTMLInputElement>(null);
@@ -104,6 +102,12 @@ export function EntryEditor({ entry }: { entry: Entry }) {
   };
   // Register once; callbacks read refs and are refreshed on every render below.
   const leaveRef = useRef(leave); leaveRef.current = leave;
+  const summaryPrepare = useRef<() => Promise<string | null>>(async () => null);
+  summaryPrepare.current = async () => await saveCurrent() ? expected.current.updated_at : null;
+  useEffect(() => {
+    registerTarget({ entryId: entry.id, title: fields.title, disabled: uploading || conflict, prepare: () => summaryPrepare.current() });
+    return () => registerTarget(null);
+  }, [entry.id, fields.title, uploading, conflict, registerTarget]);
   useEffect(() => { registerLeave(() => leaveRef.current()); return () => registerLeave(null); }, [registerLeave]);
   useEffect(() => {
     const draft = readDraft(entry);
@@ -168,12 +172,12 @@ export function EntryEditor({ entry }: { entry: Entry }) {
     { kind: 'check', Icon: ListTodo, title: '체크리스트' },
   ];
 
-  return <div className={`editor-workspace${summaryOpen && gptConnected ? ' summary-visible' : ''}`}>
+  return <div className="editor-workspace">
     <div className="editor-document"><div className="editor-inner">
     <div className="editor-top">
       <span className="status" id="save-status">{status}{status === '모든 변경 사항 저장됨' && <span className="inline-flex items-center gap-1"> · <syncInfo.Icon size={12} />{syncInfo.label}</span>}</span>
       <span className="spacer" />
-      {gptConnected && <Button variant="outline" size="sm" data-action="open-summary" aria-expanded={summaryOpen} aria-controls="diary-summary-sidebar" disabled={uploading || conflict} onClick={() => setSummaryOpen(value => !value)}>일기 요약</Button>}
+      <ChatToggle />
       {conflict && <Button variant="outline" size="xs" data-action="save-draft-copy" onClick={copyDraft}>내 편집 내용 별도 저장</Button>}
       <Button variant="ghost" size="icon-sm" data-action="favorite-entry" title="즐겨찾기" aria-label="즐겨찾기" onClick={() => updateField('favorite', !fields.favorite)}>
         <Heart size={17} fill={fields.favorite ? 'currentColor' : 'none'} />
@@ -235,6 +239,5 @@ export function EntryEditor({ entry }: { entry: Entry }) {
     <input id="attach-file" ref={attachInput} type="file" accept="image/*,video/*,audio/*,.pdf" multiple hidden onChange={attachFiles} />
     <input id="inline-image-file" ref={imageInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden onChange={insertImage} />
     </div></div>
-    {summaryOpen && gptConnected && <SummaryPanel entryId={entry.id} onClose={() => setSummaryOpen(false)} prepare={async () => await saveCurrent() ? expected.current.updated_at : null} />}
   </div>;
 }

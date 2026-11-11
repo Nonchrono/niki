@@ -39,7 +39,7 @@ export function CodexSettings() {
     setStatus(await run<CodexStatus>('codex_status'));
   });
   return <>
-    <div className="wide-head"><h2>일기 요약</h2></div>
+    <div className="wide-head"><h2>Niki와 대화</h2></div>
     <div className="panel-card settings-card codex-settings">
       <h3>GPT 계정 연결</h3>
       {status?.connected ? <p role="status">연결됨 · {status.plan || '플랜 확인 불가'}</p> : <p role="status">{status ? status.installed ? '계정 연결이 필요합니다' : 'Codex를 설치한 뒤 다시 확인해 주세요 (CLI 0.167 이상).' : '연결 상태 확인 중…'}</p>}
@@ -63,6 +63,7 @@ export function CodexSettings() {
     <div className="panel-card settings-card">
       <h3>전송되는 정보</h3>
       <p>선택한 일기의 제목과 본문이 OpenAI에 전송됩니다.</p>
+      <p>요약 버튼을 누르면 현재 일기를 전송합니다. 메시지를 보내면 입력한 내용과 최근 대화가 함께 전송됩니다. 대화 기록은 이 기기에 저장되어 모든 일기장에서 공통으로 사용합니다.</p>
     </div>
   </>;
 }

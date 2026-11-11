@@ -9,6 +9,9 @@ import { useApp } from './AppContext';
 import { accountLabel, localDate } from '../lib/format';
 import type { Journal } from '../types';
 import { askConfirm, askText } from '../lib/dialog';
+import { ChatProvider, useChat } from '../codex/ChatContext';
+import { ChatToggle } from '../codex/ChatToggle';
+import { SummaryPanel } from '../codex/SummaryPanel';
 
 const sections: { path: string; action: string; Icon: LucideIcon; label: string }[] = [
   { path: '/all', action: 'all', Icon: BookOpenText, label: '전체 일기' },
@@ -18,6 +21,11 @@ const sections: { path: string; action: string; Icon: LucideIcon; label: string 
 ];
 
 export function AppShell() {
+  return <ChatProvider><ShellContent /></ChatProvider>;
+}
+
+function ShellContent() {
+  const chat = useChat();
   const { data, update, setUpdate, go, run, refresh, action, toast, syncing, syncNow, saveBeforeLeaving } = useApp();
   const location = useLocation();
   const journalId = /^\/journals\/([^/]+)/.exec(location.pathname)?.[1]
@@ -29,6 +37,8 @@ export function AppShell() {
   const nickname = data.nickname?.trim();
   const active = data.entries.filter(entry => !entry.deleted_at);
   const timeline = location.pathname.startsWith('/all') || location.pathname.startsWith('/journals/');
+  const selectedEntryId = /\/entries\/([^/]+)$/.exec(location.pathname)?.[1];
+  const hasEditor = timeline && active.some(entry => entry.id === selectedEntryId);
   const title = timeline ? '' : location.pathname.startsWith('/settings') ? '설정'
     : location.pathname.startsWith('/calendar') ? '달력'
     : location.pathname.startsWith('/media') ? '미디어'
@@ -100,6 +110,7 @@ export function AppShell() {
     </aside>
     <main className="workspace">
       <header className="topbar"><div className="top-title">{title}</div><div className="top-spacer" />
+        {!hasEditor && <ChatToggle />}
         {data.sync_status.connected && <Button variant="outline" size="sm" data-action="drive-sync"
           title={accountLabel(data.sync_status)} disabled={syncing} onClick={() => void action(() => syncNow(true))}>
           <RefreshCw className={syncing ? 'animate-spin' : ''} />
@@ -120,7 +131,7 @@ export function AppShell() {
             })}>이 버전 건너뛰기</Button>
           </div>
         </div>}
-      <div className="content" id="content"><Outlet /></div>
+      <div className={`content${chat.open && chat.connected ? ' summary-visible' : ''}`} id="content"><Outlet />{chat.open && chat.connected && <SummaryPanel />}</div>
     </main>
     {journalMenu && <div className="menu-backdrop" onClick={() => setJournalMenu(null)}>
       <div className="context-menu journal-menu" style={{ left: journalMenu.x, top: journalMenu.y }} onClick={event => event.stopPropagation()}>

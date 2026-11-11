@@ -231,6 +231,10 @@
     width: calc(var(--spacing) * 4);
     height: calc(var(--spacing) * 4);
   }
+  .size-5 {
+    width: calc(var(--spacing) * 5);
+    height: calc(var(--spacing) * 5);
+  }
   .size-6 {
     width: calc(var(--spacing) * 6);
     height: calc(var(--spacing) * 6);
@@ -511,6 +515,9 @@
   }
   .paused {
     animation-play-state: paused;
+  }
+  .running {
+    animation-play-state: running;
   }
   .selection\:bg-primary ::selection {
     background-color: var(--primary);
@@ -2386,12 +2393,18 @@
   }
   .codex-summary-head {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 12px;
     padding: 22px 18px;
     border-bottom: 1px solid #e0e7df;
     background: #fbfcf9;
+  }
+  .codex-summary-title {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
   }
   .codex-summary-head h3 {
     margin: 0 0 4px;
@@ -2420,6 +2433,9 @@
   }
   .codex-request-bubble {
     align-self: flex-end;
+    max-width: 100%;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
     padding: 10px 14px;
     border-radius: 14px 14px 3px 14px;
     background: #dfeadd;
@@ -2447,13 +2463,17 @@
     color: #36493a;
     font-size: 13px;
   }
-  .codex-summary-actions {
-    padding: 16px;
+  .codex-chat-composer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 12px;
     border-top: 1px solid #e0e7df;
     background: #fbfcf9;
   }
-  .codex-summary-actions > button {
-    width: 100%;
+  .codex-chat-composer input {
+    min-width: 0;
+    font-size: 12px;
   }
   .codex-login {
     margin-top: 20px;
@@ -2471,7 +2491,7 @@
     overflow-wrap: anywhere;
   }
   @media screen and (max-width: 1199px) {
-    .content:has(.summary-visible) > .list-pane {
+    .content.summary-visible > .list-pane {
       display: none;
     }
     .codex-summary {

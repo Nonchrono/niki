@@ -143,6 +143,7 @@ impl Default for Template {
 #[serde(default)]
 struct Store {
     version: u32,
+    codex_conversation: Vec<codex::ChatMessage>,
     nickname: String,
     updater_config: app_updater::UpdaterConfig,
     journals: Vec<Journal>,
@@ -1585,6 +1586,7 @@ fn export_backup(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<St
     ensure_unlocked(&state)?;
     let mut store = state.store.lock().map_err(err)?.clone();
     store.password_hash = None;
+    store.codex_conversation.clear();
     store.device_id.clear();
     store.sync_cursor = None;
     store.last_sync_at = None;
@@ -2050,6 +2052,8 @@ pub fn run() {
             codex::codex_disconnect,
             codex::codex_open_login,
             codex::codex_summarize,
+            codex::codex_chat,
+            codex::codex_conversation,
             bootstrap,
             unlock,
             lock,
