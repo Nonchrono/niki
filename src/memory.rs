@@ -513,9 +513,20 @@ pub fn search<'a>(
     today: NaiveDate,
     limit: usize,
 ) -> Vec<&'a Entry> {
+    search_in(entries, query, today, limit, None)
+}
+
+/// Like `search`, but an explicit period (from a tool call) overrides the one guessed from the text.
+fn search_in<'a>(
+    entries: &'a [Entry],
+    query: &str,
+    today: NaiveDate,
+    limit: usize,
+    period: Option<(NaiveDate, NaiveDate)>,
+) -> Vec<&'a Entry> {
     let all = active(entries);
     let terms: Vec<String> = bigrams(query).into_iter().collect();
-    if let Some((from, to)) = date_range(query, today) {
+    if let Some((from, to)) = period.or_else(|| date_range(query, today)) {
         let pool: Vec<&Entry> = all
             .iter()
             .copied()
@@ -551,12 +562,13 @@ fn full_cost(e: &Entry) -> usize {
 
 /// Layered context: monthly overviews and one-line notes for everything older, full text for
 /// entries matching the message, and full text for the most recent entries.
-pub fn diary_context(store: &crate::Store, query: &str, today: NaiveDate) -> Value {
-    let (entries, entry_cache, month_cache) = (
-        &store.entries,
-        &store.codex_entry_summaries,
-        &store.codex_month_summaries,
-    );
+pub fn diary_context(
+    store: &crate::Store,
+    query: &str,
+    today: NaiveDate,
+    plan: &[PlannedSearch],
+) -> Value {
+    let (entries, entry_cache) = (&store.entries, &store.codex_entry_summaries);
     let mut all = active(entries);
     all.sort_by(|a, b| {
         b.date
@@ -578,15 +590,34 @@ pub fn diary_context(store: &crate::Store, query: &str, today: NaiveDate) -> Val
     }
     recent.reverse();
 
+    // Planned lookups come first, a few hits per search so one query cannot crowd out the rest,
+    // then the automatic search on the message itself.
+    let mut found: Vec<&Entry> = Vec::new();
+    for planned in plan {
+        for e in search_in(entries, &planned.query, today, PLAN_PER_SEARCH, planned.period) {
+            if !found.iter().any(|x| x.id == e.id) {
+                found.push(e);
+            }
+        }
+    }
+    for e in search(entries, query, today, RELEVANT_MAX + RECENT_MAX) {
+        if !found.iter().any(|x| x.id == e.id) {
+            found.push(e);
+        }
+    }
+    let (max, budget) = if plan.is_empty() {
+        (RELEVANT_MAX, RELEVANT_BUDGET)
+    } else {
+        (PLANNED_RELEVANT_MAX, PLANNED_RELEVANT_BUDGET)
+    };
     let mut relevant: Vec<&Entry> = Vec::new();
     tokens = 0;
-    for e in search(entries, query, today, RELEVANT_MAX + RECENT_MAX) {
+    for e in found {
         let cost = full_cost(e);
         if used.contains(e.id.as_str()) {
             continue;
         }
-        if relevant.len() >= RELEVANT_MAX || (!relevant.is_empty() && tokens + cost > RELEVANT_BUDGET)
-        {
+        if relevant.len() >= max || (!relevant.is_empty() && tokens + cost > budget) {
             break;
         }
         tokens += cost;
@@ -595,19 +626,7 @@ pub fn diary_context(store: &crate::Store, query: &str, today: NaiveDate) -> Val
     }
     relevant.sort_by(|a, b| a.date.cmp(&b.date));
 
-    let mut months: Vec<(&String, &MonthSummary)> = month_cache.iter().collect();
-    months.sort_by(|a, b| b.0.cmp(a.0));
-    let mut overview: Vec<Value> = Vec::new();
-    tokens = 0;
-    for (month, summary) in months {
-        let cost = est_tokens(&summary.text) + 8;
-        if tokens + cost > MONTH_BUDGET {
-            break;
-        }
-        tokens += cost;
-        overview.push(json!({ "month": month, "overview": summary.text }));
-    }
-    overview.reverse();
+    let overview = month_overview(store);
 
     let mut notes: Vec<Value> = Vec::new();
     let (mut omitted, mut full) = (0usize, false);
@@ -641,6 +660,110 @@ pub fn diary_context(store: &crate::Store, query: &str, today: NaiveDate) -> Val
         "entries_matching_the_message": relevant.iter().map(|e| full_json(e)).collect::<Vec<_>>(),
         "most_recent_entries_oldest_to_newest": recent.iter().map(|e| full_json(e)).collect::<Vec<_>>()
     })
+}
+
+// ------------------------------------------------------------- retrieval planning
+//
+// Codex's dynamic tools only work with its code-mode host enabled, which would also let the
+// model run JavaScript outside Niki's control. Instead a small first request plans which past
+// entries to look up; Niki runs those searches locally and feeds the hits into the real reply.
+
+const PLAN_MAX_SEARCHES: usize = 3;
+const PLAN_PER_SEARCH: usize = 4;
+const PLANNED_RELEVANT_MAX: usize = 10;
+const PLANNED_RELEVANT_BUDGET: usize = 12_000;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlannedSearch {
+    pub query: String,
+    pub period: Option<(NaiveDate, NaiveDate)>,
+}
+
+fn month_overview(store: &crate::Store) -> Vec<Value> {
+    let mut months: Vec<(&String, &MonthSummary)> = store.codex_month_summaries.iter().collect();
+    months.sort_by(|a, b| b.0.cmp(a.0));
+    let mut overview: Vec<Value> = Vec::new();
+    let mut tokens = 0usize;
+    for (month, summary) in months {
+        let cost = est_tokens(&summary.text) + 8;
+        if tokens + cost > MONTH_BUDGET {
+            break;
+        }
+        tokens += cost;
+        overview.push(json!({ "month": month, "overview": summary.text }));
+    }
+    overview.reverse();
+    overview
+}
+
+/// Input for the planning request, or `None` when the diary is small enough to be sent whole.
+pub fn planner_prompt(store: &crate::Store, message: &str, today: NaiveDate) -> Option<String> {
+    let live = active(&store.entries);
+    if live.len() <= RECENT_MAX {
+        return None;
+    }
+    let mut dates: Vec<&str> = live.iter().map(|e| e.date.as_str()).collect();
+    dates.sort();
+    let previous = store
+        .codex_conversation
+        .iter()
+        .rev()
+        .find(|m| matches!(m.role, crate::codex::Role::User))
+        .map_or("", |m| m.content.as_str());
+    Some(
+        json!({
+            "today": today.format("%Y-%m-%d").to_string(),
+            "message": truncate_chars(message.trim(), 2_000),
+            "previous_user_message": truncate_chars(previous, 1_000),
+            "diary_span": {
+                "total_entries": live.len(),
+                "oldest": dates.first().copied().unwrap_or(""),
+                "newest": dates.last().copied().unwrap_or("")
+            },
+            "monthly_overviews_oldest_to_newest": month_overview(store)
+        })
+        .to_string(),
+    )
+}
+
+fn plan_date(value: &Value) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(value.as_str()?.trim(), "%Y-%m-%d").ok()
+}
+
+/// Reads the planner's JSON; anything malformed yields no searches (the automatic search still runs).
+pub fn parse_plan(output: &str, today: NaiveDate) -> Vec<PlannedSearch> {
+    let (Some(start), Some(end)) = (output.find('{'), output.rfind('}')) else {
+        return Vec::new();
+    };
+    if end < start {
+        return Vec::new();
+    }
+    let Ok(plan) = serde_json::from_str::<Value>(&output[start..=end]) else {
+        return Vec::new();
+    };
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap_or(today);
+    plan["searches"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|item| {
+                    let query = truncate_chars(item["query"].as_str().unwrap_or("").trim(), 200);
+                    let period = match (plan_date(&item["from"]), plan_date(&item["to"])) {
+                        (Some(from), Some(to)) if from <= to => Some((from, to)),
+                        (Some(from), None) if from <= today => Some((from, today)),
+                        (None, Some(to)) => Some((epoch, to)),
+                        _ => None,
+                    };
+                    if query.is_empty() && period.is_none() {
+                        None
+                    } else {
+                        Some(PlannedSearch { query, period })
+                    }
+                })
+                .take(PLAN_MAX_SEARCHES)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -776,6 +899,47 @@ mod tests {
     }
 
     #[test]
+    fn planner_runs_only_for_large_diaries_and_parses_leniently() {
+        let today = day(2026, 11, 11);
+        let small = crate::Store {
+            entries: vec![entry(1, "2026-01-01", "a", "b")],
+            ..crate::Store::default()
+        };
+        assert!(planner_prompt(&small, "안녕", today).is_none());
+        let big = crate::Store {
+            entries: (0..30).map(|i| entry(i, "2025-05-05", "제목", "본문")).collect(),
+            ..crate::Store::default()
+        };
+        let prompt: Value = serde_json::from_str(&planner_prompt(&big, "작년 여행", today).unwrap()).unwrap();
+        assert_eq!(prompt["diary_span"]["total_entries"], 30);
+        assert_eq!(prompt["today"], "2026-11-11");
+        let out = "```json\n{\"searches\":[{\"query\":\"제주도\",\"from\":\"2024-06-01\",\"to\":\"2024-08-31\"},{\"query\":\"\",\"from\":null,\"to\":null},{\"query\":\"친구\",\"from\":\"nope\",\"to\":null},{\"query\":\"a\"},{\"query\":\"b\"}]}\n```";
+        let plan = parse_plan(out, today);
+        assert_eq!(plan.len(), 3, "empty searches dropped, capped at three");
+        assert_eq!(plan[0].query, "제주도");
+        assert_eq!(plan[0].period, Some((day(2024, 6, 1), day(2024, 8, 31))));
+        assert_eq!(plan[1].period, None, "an unparsable date falls back to text search");
+        assert!(parse_plan("검색 불필요", today).is_empty());
+        assert!(parse_plan("{\"searches\":\"x\"}", today).is_empty());
+    }
+
+    #[test]
+    fn planned_searches_surface_old_entries_the_message_alone_would_miss() {
+        let mut list = vec![entry(1, "2024-07-10", "제주도 여행", "친구와 제주도 바닷가를 걸었다.")];
+        for i in 10..60 {
+            list.push(entry(i, &format!("2026-{:02}-{:02}", i % 10 + 1, i % 28 + 1), "평범", "그냥 평범한 하루"));
+        }
+        let store = crate::Store { entries: list, ..crate::Store::default() };
+        let today = day(2026, 11, 11);
+        let titles = |ctx: &Value| ctx["entries_matching_the_message"].to_string();
+        let plain = diary_context(&store, "그때 즐거웠던 일", today, &[]);
+        assert!(!titles(&plain).contains("제주도"));
+        let plan = vec![PlannedSearch { query: "바닷가".into(), period: Some((day(2024, 1, 1), day(2024, 12, 31))) }];
+        let planned = diary_context(&store, "그때 즐거웠던 일", today, &plan);
+        assert!(titles(&planned).contains("제주도"));
+    }
+
+    #[test]
     fn model_output_is_filtered_to_sent_ids() {
         let allowed: HashSet<String> = ["e1".to_owned(), "e2".to_owned()].into();
         let out = "```json\n[{\"id\":\"e1\",\"summary\":\" 산책 \"},{\"id\":\"zz\",\"summary\":\"x\"},{\"id\":\"e2\",\"summary\":\"\"}]\n```";
@@ -792,7 +956,7 @@ mod tests {
         }
         let mut store = crate::Store { entries: list, ..crate::Store::default() };
         store.codex_month_summaries.insert("2024-01".to_owned(), MonthSummary { signature: "s".into(), text: "첫 달 개요".into() });
-        let ctx = diary_context(&store, "제목7 이야기", day(2026, 11, 11));
+        let ctx = diary_context(&store, "제목7 이야기", day(2026, 11, 11), &[]);
         assert_eq!(ctx["counts"]["total_entries"], 400);
         assert!(ctx["counts"]["most_recent_entries_in_full"].as_u64().unwrap() <= RECENT_MAX as u64);
         assert!(ctx["counts"]["oldest_entries_not_listed"].as_u64().unwrap() > 0);
