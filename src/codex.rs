@@ -114,6 +114,21 @@ fn executable() -> Option<PathBuf> {
         ]
         .map(PathBuf::from),
     );
+    // Finder/Dock에서 실행한 앱은 셸의 PATH를 상속받지 않으므로 홈 디렉터리의 흔한 설치 위치를 직접 확인한다.
+    #[cfg(unix)]
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        let name = "codex";
+        paths.extend([
+            home.join(".codex/packages/standalone/current/bin").join(name),
+            home.join(".local/bin").join(name),
+            home.join(".bun/bin").join(name),
+            home.join(".npm-global/bin").join(name),
+            home.join(".volta/bin").join(name),
+        ]);
+        if let Ok(versions) = std::fs::read_dir(home.join(".nvm/versions/node")) {
+            paths.extend(versions.flatten().map(|v| v.path().join("bin").join(name)));
+        }
+    }
     if let Some(path) = std::env::var_os("PATH") {
         paths.extend(
             std::env::split_paths(&path)
