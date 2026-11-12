@@ -2379,15 +2379,17 @@
   .content {
     position: relative;
   }
-  .codex-fab {
+  .content > .sync-fab {
     position: absolute;
-    right: 24px;
-    bottom: 24px;
+    right: 20px;
+    bottom: 20px;
     z-index: 15;
-    width: 48px;
-    height: 48px;
+    height: 40px;
     border-radius: 999px;
-    box-shadow: 0 6px 18px #1c261f33;
+    box-shadow: 0 4px 14px #1c261f26;
+  }
+  .content:has(.codex-summary.open) > .sync-fab {
+    right: calc(min(435px, 100%) + 16px);
   }
   .codex-summary {
     position: absolute;
@@ -2442,13 +2444,14 @@
   .content.chat-pinned {
     display: flex;
   }
-  .content.chat-pinned > :not(.codex-summary):not(.codex-fab) {
-    flex: 1;
+  .content.chat-pinned > .list-pane {
+    flex: 0 0 220px;
+    width: 220px;
     min-width: 0;
   }
   .content.chat-pinned .codex-summary {
     position: relative;
-    flex: 0 0 min(435px, 45%);
+    flex: 0 0 435px;
     width: auto;
     box-shadow: none;
     transform: none;
@@ -2532,6 +2535,8 @@
     color: #7c927f;
   }
   .codex-input {
+    overflow-y: auto;
+    min-height: 38px;
     flex: 1;
     min-width: 0;
     resize: none;
@@ -2547,9 +2552,6 @@
   .codex-input:focus {
     outline: 2px solid #b8cdb6;
     outline-offset: 0;
-  }
-  .codex-chat-composer {
-    align-items: flex-end;
   }
   .codex-footnote {
     margin: 0;
@@ -2661,7 +2663,8 @@
     color: #7c927f;
     font-size: 13px;
   }
-  .codex-conversation-empty svg {
+  .codex-conversation-empty > svg {
+    display: block;
     margin: 0 auto 12px;
   }
   .codex-request-bubble {
@@ -2698,7 +2701,8 @@
   }
   .codex-chat-composer {
     display: flex;
-    align-items: center;
+    flex-shrink: 0;
+    align-items: flex-end;
     gap: 8px;
     padding: 14px 12px;
     border-top: 1px solid #e0e7df;
@@ -2733,6 +2737,183 @@
       overflow: visible;
     }
   }
+  .workspace {
+    container-type: inline-size;
+  }
+  .settings-nav {
+    width: 260px;
+    min-width: 220px;
+  }
+  #settings-detail {
+    padding: 28px 32px 84px;
+  }
+  #settings-detail .settings-card {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  #settings-detail .template-row {
+    flex-wrap: wrap;
+  }
+  #settings-detail .template-row > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  #settings-detail .codex-check {
+    align-items: flex-start;
+    gap: 10px;
+    line-height: 1.65;
+    cursor: pointer;
+  }
+  #settings-detail .codex-check input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    margin: 2px 0 0;
+    padding: 0;
+    accent-color: #315e42;
+  }
+  #settings-detail .codex-check span {
+    min-width: 0;
+  }
+  #settings-detail .codex-field select {
+    max-width: 100%;
+    text-overflow: ellipsis;
+  }
+  .codex-journal-list {
+    display: grid;
+    gap: 6px;
+  }
+  #settings-detail .codex-journal-choice {
+    margin-top: 0;
+  }
+  #settings-detail .codex-subhead {
+    margin: 8px 0 0;
+  }
+  .codex-journal-choice {
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: #f5f8f3;
+  }
+  .codex-details > summary {
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    color: #3d5944;
+  }
+  .codex-details > summary > span {
+    display: block;
+    margin-top: 5px;
+    font-size: 12px;
+    font-weight: 400;
+    color: #718475;
+  }
+  .codex-details > .settings-card {
+    border: 0;
+    border-top: 1px solid #e3eae1;
+    border-radius: 0;
+    padding: 20px 0 0;
+    margin: 20px 0 0;
+  }
+  .codex-data-list {
+    padding-left: 18px;
+    margin: 16px 0 0;
+    font-size: 12px;
+    line-height: 1.8;
+    color: #5e7363;
+  }
+  .codex-data-list li + li {
+    margin-top: 8px;
+  }
+  .settings-card .codex-connected {
+    color: #315e42;
+    font-weight: 600;
+  }
+  .codex-summary-head {
+    flex-shrink: 0;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 16px;
+  }
+  .codex-summary-title {
+    min-width: 0;
+    gap: 6px;
+  }
+  .codex-summary-head h3 {
+    white-space: nowrap;
+  }
+  .codex-head-actions {
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+  .codex-summary .codex-starters {
+    width: 100%;
+    max-width: 320px;
+    margin-inline: auto;
+  }
+  .codex-summary .codex-starter {
+    min-height: 38px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+  .codex-starter > svg {
+    flex: 0 0 14px;
+  }
+  .codex-conversation-empty {
+    width: 100%;
+    min-width: 0;
+    flex-shrink: 0;
+  }
+  .codex-turn, .codex-response {
+    flex-shrink: 0;
+  }
+  .codex-input-hint {
+    margin: 0;
+    padding: 0 14px 6px;
+    font-size: 10px;
+    color: #718475;
+    background: #fbfcf9;
+    text-align: right;
+  }
+  .codex-footnote, .codex-input-hint, .codex-memory-status {
+    flex-shrink: 0;
+  }
+  @container (max-width: 1100px) {
+    .content.chat-pinned > .list-pane {
+      display: none;
+    }
+    #settings-detail {
+      padding: 24px 20px 84px;
+    }
+  }
+  @container (max-width: 760px) {
+    .content.chat-pinned > .list-pane {
+      display: flex;
+    }
+    .content.chat-pinned .codex-summary {
+      position: absolute;
+      width: min(435px, 100%);
+      box-shadow: -14px 0 32px #1c261f1f;
+    }
+    .settings-nav {
+      width: 200px;
+      min-width: 180px;
+    }
+    #settings-detail {
+      padding: 20px 16px 84px;
+    }
+    #settings-detail .settings-card {
+      padding: 18px;
+    }
+    #settings-detail .codex-details > .settings-card {
+      padding: 18px 0 0;
+    }
+  }
+  @media print {
+    .sync-fab {
+      display: none !important;
+    }
+  }
 }
 :root {
   --radius: 0.625rem;
@@ -2759,6 +2940,26 @@
   body {
     background-color: var(--background);
     color: var(--foreground);
+  }
+}
+@layer utilities {
+  #settings-detail .panel-actions > [data-slot="button"] {
+    max-width: 100%;
+    height: auto;
+    min-height: 36px;
+    white-space: normal;
+  }
+  #settings-detail .codex-field [data-slot="native-select-wrapper"] {
+    width: 100%;
+    min-width: 0;
+  }
+  .content > .sync-fab {
+    height: 40px;
+    border-radius: 999px;
+  }
+  .codex-chat-composer > [data-slot="button"] {
+    width: 36px;
+    height: 36px;
   }
 }
 @layer components {

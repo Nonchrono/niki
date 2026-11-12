@@ -2,6 +2,7 @@ const { chromium } = require('playwright-core');
 const assert = require('node:assert/strict');
 const { pathToFileURL } = require('node:url');
 const path = require('node:path');
+const fs = require('node:fs');
 
 // Chat experience and settings: consent, sources, safety card, progress and stop, composer,
 // starters, answer actions, pinning, hiding journals, and the Codex settings cards.
@@ -44,7 +45,7 @@ const path = require('node:path');
               if (args.excluded) prefs.excluded_journals.push(args.journalId);
               return structuredClone(prefs);
             case 'codex_set_prefs': Object.assign(prefs, { model: args.model, model_fallback: args.modelFallback, background: args.background }); return structuredClone(prefs);
-            case 'codex_models': return [{ id: 'gpt-6-luna', name: 'GPT-6 Luna' }, { id: 'gpt-6-sol', name: 'GPT-6 Sol' }];
+            case 'codex_models': return [{ id: 'gpt-6-luna', name: 'GPT-6 Luna' }, { id: 'gpt-6-sol', name: 'GPT-6 Sol' }, { id: 'long-model', name: 'Long model name '.repeat(20) }];
             case 'codex_cli_info': return structuredClone(cli);
             case 'codex_set_cli_path':
               if (args.path === '/bad') throw Error('이 파일은 Codex CLI가 아닌 것 같습니다.');
@@ -88,6 +89,27 @@ const path = require('node:path');
     await page.locator('[data-action="codex-consent"]').click();
     await composer.waitFor();
     assert.deepEqual(await page.evaluate(() => calls.find(c => c.name === 'codex_set_consent').args), { consented: true });
+
+    fs.mkdirSync('output/codex-ui', { recursive: true });
+    // Empty composer and starter icons must not overflow or inherit hero-icon spacing.
+    for (const width of [1280, 900]) {
+      await page.setViewportSize({ width, height: 650 });
+      const layout = await page.evaluate(() => {
+        const field = document.querySelector('.codex-input');
+        const icon = document.querySelector('.codex-starter svg');
+        const panel = document.querySelector('.codex-summary');
+        return { fieldOverflow: field.scrollHeight - field.clientHeight,
+          iconMargin: getComputedStyle(icon).marginBottom,
+          panelOverflow: panel.scrollWidth - panel.clientWidth,
+          bodyOverflow: document.documentElement.scrollWidth - innerWidth };
+      });
+      assert.ok(layout.fieldOverflow <= 1, JSON.stringify(layout));
+      assert.equal(layout.iconMargin, '0px');
+      assert.ok(layout.panelOverflow <= 1 && layout.bodyOverflow <= 0, JSON.stringify(layout));
+      assert.equal(await page.locator('[data-action="codex-new-chat"]').innerText(), '새 대화');
+      await page.screenshot({ path: `output/codex-ui/chat-empty-${width}.png` });
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
 
     // 7 (starters) and 14 (not synced note).
     assert.ok((await page.locator('#diary-summary-sidebar').innerText()).includes('다른 기기와 동기화되지 않아요'));
@@ -162,11 +184,22 @@ const path = require('node:path');
     const overlaid = await editorWidth();
     await page.locator('[data-action="codex-pin"]').click();
     await page.waitForFunction(() => document.querySelector('.content.chat-pinned'));
-    assert.ok(await editorWidth() < overlaid - 200, 'pinned panel shares the row with the diary');
+    assert.ok(await editorWidth() < overlaid, 'pinned panel shares the row with the diary');
+    const pinnedLayout = await page.evaluate(() => ({
+      editor: document.querySelector('.editor-document').getBoundingClientRect().right,
+      chat: document.querySelector('.codex-summary').getBoundingClientRect().left,
+    }));
+    assert.ok(pinnedLayout.editor <= pinnedLayout.chat + 1, JSON.stringify(pinnedLayout));
+    await page.setViewportSize({ width: 900, height: 600 });
+    assert.ok(await page.locator('[data-action="codex-pin"]').isVisible());
+    assert.ok(await page.getByRole('button', { name: '메시지 보내기', exact: true }).isVisible());
+    await page.setViewportSize({ width: 1280, height: 800 });
     assert.equal(await page.evaluate(() => localStorage.getItem('niki-chat-pinned')), '1');
     await page.locator('[data-action="codex-pin"]').click();
     await page.waitForFunction(() => !document.querySelector('.content.chat-pinned'));
     await page.getByRole('button', { name: '대화 닫기', exact: true }).click();
+
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('#diary-summary-sidebar')).visibility === 'hidden');
 
     // 3 (hide a journal): from the sidebar menu; shown by an icon; reversible.
     await page.locator('[data-action="journal"][data-id="j2"]').click({ button: 'right' });
@@ -176,6 +209,10 @@ const path = require('node:path');
 
     // Settings: 10 (Codex CLI), 11 (model), 12 (background), 13 (memory), and consent.
     await page.evaluate(() => location.hash = '#/settings/codex');
+    assert.equal(await page.locator('#settings-detail h2').innerText(), 'AI 연결');
+    assert.ok(!await page.locator('[data-testid="cli-card"]').isVisible(), 'technical details start collapsed');
+    await page.screenshot({ path: 'output/codex-ui/ai-settings.png' });
+    await page.locator('[data-testid="advanced-settings"] > summary').click();
     await page.locator('[data-testid="cli-card"]').waitFor();
     const cliText = await page.locator('[data-testid="cli-card"]').innerText();
     assert.ok(cliText.includes('0.167.1') && cliText.includes('/Users/me/.local/bin/codex') && cliText.includes('자동 감지'), cliText);
@@ -192,11 +229,27 @@ const path = require('node:path');
     await page.locator('[data-action="codex-load-models"]').click();
     await page.getByRole('option', { name: 'GPT-6 Sol' }).waitFor({ state: 'attached' });
     await page.getByLabel('Niki가 쓸 모델').selectOption('gpt-6-sol');
-    await page.getByLabel(/다른 모델로 대신 답하기/).check();
-    await page.getByLabel(/백그라운드 정리 사용/).uncheck();
+    await page.getByLabel(/다른 AI로 답하기/).check();
+    await page.getByLabel(/지난 일기와 긴 대화 자동 요약/).uncheck();
     await page.locator('[data-action="codex-save-prefs"]').click();
     await page.getByText('저장했어요.').waitFor();
     assert.deepEqual(await page.evaluate(() => calls.filter(c => c.name === 'codex_set_prefs').at(-1).args), { model: 'gpt-6-sol', modelFallback: true, background: false });
+
+    await page.getByLabel('Niki가 쓸 모델').selectOption('long-model');
+    for (const width of [1280, 900]) {
+      await page.setViewportSize({ width, height: 650 });
+      const layout = await page.evaluate(() => {
+        const detail = document.querySelector('#settings-detail');
+        const check = document.querySelector('.codex-check input').getBoundingClientRect();
+        return { overflow: detail.scrollWidth - detail.clientWidth, checkbox: check.width,
+          bodyOverflow: document.documentElement.scrollWidth - innerWidth };
+      });
+      assert.equal(layout.checkbox, 16, JSON.stringify(layout));
+      assert.ok(layout.overflow <= 1 && layout.bodyOverflow <= 0, JSON.stringify(layout));
+      await page.locator('[data-testid="usage-card"]').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: `output/codex-ui/ai-advanced-${width}.png` });
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
 
     const memoryText = await page.locator('[data-testid="memory-card"]').innerText();
     assert.ok(memoryText.includes('1/2편') && memoryText.includes('월별 요약 3개') && memoryText.includes('설치됨'), memoryText);

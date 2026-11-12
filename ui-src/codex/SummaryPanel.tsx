@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUp, FileText, MessageSquare, Pin, PinOff, RotateCcw, Square, SquarePen, X } from 'lucide-react';
+import { ArrowUp, FileText, MessageSquare, Pin, PinOff, RotateCcw, Square, Plus, X } from 'lucide-react';
 import { useApp } from '../app/AppContext';
 import { Button } from '../components/ui/button';
 import { askConfirm } from '../lib/dialog';
@@ -39,7 +39,7 @@ export function SummaryPanel() {
     const field = composer.current;
     if (!field) return;
     field.style.height = 'auto';
-    field.style.height = `${Math.min(field.scrollHeight, 132)}px`;
+    field.style.height = `${Math.min(field.scrollHeight + 2, 132)}px`;
   }, [draft, open]);
   const needsConsent = !!prefs && !prefs.consented;
   const lastAnswer = [...messages].reverse().find(message => message.role === 'assistant');
@@ -61,10 +61,10 @@ export function SummaryPanel() {
     <div className="codex-summary-head">
       <div className="codex-summary-title"><h3>Niki와 대화</h3>
         <Button variant="outline" size="xs" data-action="codex-summarize" disabled={busy || !ready || needsConsent || !target || target.disabled}
-          title={target ? '현재 열려 있는 일기 요약' : '요약할 일기를 먼저 열어 주세요'} onClick={() => void summarize()}>요약</Button>
+          title={target ? '현재 열려 있는 일기 요약' : '요약할 일기를 먼저 열어 주세요'} onClick={() => void summarize()}>일기 요약</Button>
       </div>
       <div className="codex-head-actions">
-        <Button variant="ghost" size="icon-sm" data-action="codex-new-chat" title="새 대화" aria-label="새 대화" disabled={busy || !messages.length} onClick={() => void startNew()}><SquarePen size={16} /></Button>
+        <Button variant="ghost" size="sm" data-action="codex-new-chat" title="대화 기록을 지우고 새로 시작" disabled={busy || !messages.length} onClick={() => void startNew()}><Plus size={16} />새 대화</Button>
         <Button variant="ghost" size="icon-sm" data-action="codex-pin" title={pinned ? '고정 해제 (일기 위에 겹쳐 보기)' : '고정 (일기를 옆으로 밀어 함께 보기)'} aria-label={pinned ? '고정 해제' : '패널 고정'} aria-pressed={pinned} onClick={() => setPinned(!pinned)}>{pinned ? <PinOff size={16} /> : <Pin size={16} />}</Button>
         <Button variant="ghost" size="icon-sm" aria-label="대화 닫기" onClick={close}><X size={17} /></Button>
       </div>
@@ -82,7 +82,7 @@ export function SummaryPanel() {
         <li>보낸 내용은 내 ChatGPT 계정으로 처리되고, Niki는 별도 서버를 거치지 않아요.</li>
         <li>일기를 찾는 검색은 이 기기 안에서 해요.</li>
         <li>숨기고 싶은 일기장은 왼쪽 일기장 목록에서 우클릭해 <strong>Niki에게 숨기기</strong>를 고르면 돼요.</li>
-        <li>설정의 'Niki와 대화'에서 언제든 동의를 거둘 수 있어요.</li>
+        <li>설정의 'AI 연결'에서 언제든 동의를 거둘 수 있어요.</li>
       </ul>
       <Button data-action="codex-consent" disabled={consenting} onClick={() => { setConsenting(true); void setConsent(true).finally(() => setConsenting(false)); }}>동의하고 시작하기</Button>
     </div> : <>
@@ -125,7 +125,7 @@ export function SummaryPanel() {
         {!ready && error && <Button variant="outline" size="sm" onClick={() => void reload()}>대화 다시 불러오기</Button>}
       </div>
       <form className="codex-chat-composer" onSubmit={event => { event.preventDefault(); submit(); }}>
-        <textarea ref={composer} className="codex-input" rows={1} aria-label="Niki에게 메시지" placeholder="Niki에게 메시지 보내기 (Shift+Enter로 줄바꿈)" value={draft} maxLength={6000} disabled={busy}
+        <textarea ref={composer} className="codex-input" rows={1} aria-label="Niki에게 메시지" aria-describedby="codex-input-hint" placeholder="Niki에게 메시지 보내기" value={draft} maxLength={6000} disabled={busy}
           onChange={event => setDraft(event.target.value)}
           onKeyDown={event => {
             if (event.key !== 'Enter' || event.shiftKey) return;
@@ -135,6 +135,7 @@ export function SummaryPanel() {
           }} />
         <Button type="submit" size="icon-sm" aria-label="메시지 보내기" disabled={busy || !ready || !draft.trim()}><ArrowUp size={17} /></Button>
       </form>
+      <p className="codex-input-hint" id="codex-input-hint">Enter로 전송 · Shift+Enter로 줄바꿈</p>
       <p className="codex-footnote">대화는 이 기기에만 저장되고 다른 기기와 동기화되지 않아요.</p>
     </>}
   </aside>;

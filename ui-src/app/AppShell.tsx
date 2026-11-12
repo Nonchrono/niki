@@ -110,11 +110,7 @@ function ShellContent() {
     </aside>
     <main className="workspace">
       <header className="topbar"><div className="top-title">{title}</div><div className="top-spacer" />
-        {data.sync_status.connected && <Button variant="outline" size="sm" data-action="drive-sync"
-          title={accountLabel(data.sync_status)} disabled={syncing} onClick={() => void action(() => syncNow(true))}>
-          <RefreshCw className={syncing ? 'animate-spin' : ''} />
-          {syncing ? '동기화 중' : `동기화${data.sync_status.pending_upload_count ? ` (${data.sync_status.pending_upload_count})` : ''}`}
-        </Button>}
+        <ChatToggle />
         <Button size="sm" data-action="new-entry" onClick={() => void createEntry()}><Plus />새 일기</Button>
       </header>
       {update?.update_available && update.latest_version !== data.updater_config?.skipped_version &&
@@ -130,7 +126,15 @@ function ShellContent() {
             })}>이 버전 건너뛰기</Button>
           </div>
         </div>}
-      <div className={`content${chat.pinned && chat.open && chat.connected ? ' chat-pinned' : ''}`} id="content"><Outlet />{chat.connected && <><ChatToggle /><SummaryPanel /></>}</div>
+      <div className={`content${chat.pinned && chat.open && chat.connected ? ' chat-pinned' : ''}`} id="content"><Outlet />
+        {data.sync_status.connected && <Button variant="outline" size="sm" className="sync-fab" data-action="drive-sync"
+          title={data.sync_status.sync_paused ? '설정에서 자동 동기화를 재개해 주세요' : accountLabel(data.sync_status)}
+          disabled={syncing || data.sync_status.sync_paused} onClick={() => void action(() => syncNow(true))}>
+          <RefreshCw className={syncing ? 'animate-spin' : ''} />
+          {syncing ? '동기화 중' : `동기화${data.sync_status.pending_upload_count ? ` (${data.sync_status.pending_upload_count})` : ''}`}
+        </Button>}
+        {chat.connected && <SummaryPanel />}
+      </div>
     </main>
     {journalMenu && <div className="menu-backdrop" onClick={() => setJournalMenu(null)}>
       <div className="context-menu journal-menu" style={{ left: journalMenu.x, top: journalMenu.y }} onClick={event => event.stopPropagation()}>
