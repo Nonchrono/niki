@@ -58,7 +58,6 @@
 @layer utilities {
   #settings-detail .panel-actions > [data-slot="button"] { max-width: 100%; height: auto; min-height: 36px; white-space: normal; }
   #settings-detail .codex-field [data-slot="native-select-wrapper"] { width: 100%; min-width: 0; }
-  .content > .sync-fab { height: 40px; border-radius: 999px; }
   .codex-chat-composer > [data-slot="button"] { width: 36px; height: 36px; }
 }
 

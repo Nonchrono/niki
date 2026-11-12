@@ -27,7 +27,7 @@ const fs = require('node:fs');
         journals: [{ id: 'j1', name: '매일 일기', color: '#576b61' }, { id: 'j2', name: '여행 일기', color: '#576b61' }],
         entries: [entry('e1', '산책', '공원에서 산책했다.'), entry('e2', '제주 여행', '제주도 바닷가를 걸었다.', 'j2')],
         templates: [], sync_conflicts: [], pending_resolution_count: 0, synced_entry_ids: [],
-        sync_status: { connected: false, sync_paused: false, pending_upload_count: 0 },
+        sync_status: { connected: true, sync_paused: false, pending_upload_count: 0 },
       };
       window.emitProgress = payload => (listeners['niki-chat-progress'] || []).forEach(cb => cb({ payload }));
       window.__TAURI__ = {
@@ -36,6 +36,7 @@ const fs = require('node:fs');
           calls.push({ name, args });
           switch (name) {
             case 'bootstrap': return structuredClone(sample);
+            case 'drive_sync_now': return { warnings: [] };
             case 'codex_status': return { installed: true, connected: true, plan: 'plus', login_pending: false };
             case 'codex_conversation': return structuredClone(chatHistory);
             case 'codex_prefs': return structuredClone(prefs);
@@ -85,7 +86,7 @@ const fs = require('node:fs');
     await page.locator('[data-testid="consent-card"]').waitFor();
     assert.equal(await composer.count(), 0, 'no composer before consent');
     assert.ok((await page.locator('[data-testid="consent-card"]').innerText()).includes('OpenAI'));
-    assert.ok(await page.locator('[data-action="codex-summarize"]').isDisabled(), 'summaries need consent too');
+    assert.equal(await page.locator('[data-action="codex-starter-summary"]').count(), 0, 'no summary action before consent');
     await page.locator('[data-action="codex-consent"]').click();
     await composer.waitFor();
     assert.deepEqual(await page.evaluate(() => calls.find(c => c.name === 'codex_set_consent').args), { consented: true });
@@ -94,6 +95,13 @@ const fs = require('node:fs');
     // Empty composer and starter icons must not overflow or inherit hero-icon spacing.
     for (const width of [1280, 900]) {
       await page.setViewportSize({ width, height: 650 });
+      const actions = await page.locator('.topbar [data-slot="button"]').evaluateAll(buttons => buttons.map(button => {
+        const rect = button.getBoundingClientRect();
+        return { action: button.dataset.action, y: rect.y, right: rect.right };
+      }));
+      assert.deepEqual(actions.map(button => button.action), ['drive-sync', 'open-summary', 'new-entry']);
+      assert.ok(actions.every(button => Math.abs(button.y - actions[0].y) < 1 && button.right <= width), JSON.stringify(actions));
+      assert.equal(await page.locator('.codex-summary-head [data-action="codex-summarize"]').count(), 0);
       const layout = await page.evaluate(() => {
         const field = document.querySelector('.codex-input');
         const icon = document.querySelector('.codex-starter svg');

@@ -27,14 +27,11 @@ select:hover{border-color:#b5cbb8;background-color:#f8fbf7}select option{color:#
 .editor-workspace { display: flex; height: 100%; min-width: 0; min-height: 0; }
 .editor-document { flex: 1; min-width: 0; overflow-y: auto; }
 .content { position: relative; }
-.content > .sync-fab { position: absolute; right: 20px; bottom: 20px; z-index: 15; height: 40px; border-radius: 999px; box-shadow: 0 4px 14px #1c261f26; }
-.content:has(.codex-summary.open) > .sync-fab { right: calc(min(435px, 100%) + 16px); }
 .codex-summary { position: absolute; top: 0; right: 0; bottom: 0; z-index: 20; display: flex; flex-direction: column; width: min(435px, 100%); min-width: 0; border-left: 1px solid #e0e7df; background: #f1f5ef; box-shadow: none; visibility: hidden; transform: translateX(100%); transition: transform .35s ease-in-out, box-shadow .35s ease-in-out, visibility 0s linear .35s; }
 .codex-summary.open { visibility: visible; transform: translateX(0); box-shadow: -14px 0 32px #1c261f1f; transition: transform .35s ease-in-out, box-shadow .35s ease-in-out, visibility 0s; }
 @media (prefers-reduced-motion: reduce) { .codex-summary, .codex-summary.open { transition: none; } }
 .codex-summary-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 22px 18px; border-bottom: 1px solid #e0e7df; background: #fbfcf9; }
-.codex-summary-title { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
-.codex-summary-head h3 { margin: 0 0 4px; font-size: 15px; }
+.codex-summary-head h3 { margin: 0; font-size: 15px; }
 .codex-summary p, .codex-settings p { line-height: 1.65; }
 .content.chat-pinned { display: flex; }
 .content.chat-pinned > .list-pane { flex: 0 0 220px; width: 220px; min-width: 0; }
@@ -111,7 +108,6 @@ select:hover{border-color:#b5cbb8;background-color:#f8fbf7}select option{color:#
 .codex-data-list li + li { margin-top: 8px; }
 .settings-card .codex-connected { color: #315e42; font-weight: 600; }
 .codex-summary-head { flex-shrink: 0; align-items: center; flex-wrap: wrap; gap: 8px; padding: 16px; }
-.codex-summary-title { min-width: 0; gap: 6px; }
 .codex-summary-head h3 { white-space: nowrap; }
 .codex-head-actions { flex-shrink: 0; margin-left: auto; }
 .codex-summary .codex-starters { width: 100%; max-width: 320px; margin-inline: auto; }
@@ -133,4 +129,3 @@ select:hover{border-color:#b5cbb8;background-color:#f8fbf7}select option{color:#
   #settings-detail .settings-card { padding: 18px; }
   #settings-detail .codex-details > .settings-card { padding: 18px 0 0; }
 }
-@media print { .sync-fab { display: none !important; } }

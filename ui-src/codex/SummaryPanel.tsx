@@ -59,10 +59,7 @@ export function SummaryPanel() {
   const submit = () => { if (!busy && ready && draft.trim()) void send(); };
   return <aside className={`codex-summary${open ? ' open' : ''}`} id="diary-summary-sidebar" aria-label="Niki와 대화" aria-hidden={!open}>
     <div className="codex-summary-head">
-      <div className="codex-summary-title"><h3>Niki와 대화</h3>
-        <Button variant="outline" size="xs" data-action="codex-summarize" disabled={busy || !ready || needsConsent || !target || target.disabled}
-          title={target ? '현재 열려 있는 일기 요약' : '요약할 일기를 먼저 열어 주세요'} onClick={() => void summarize()}>일기 요약</Button>
-      </div>
+      <h3>Niki와 대화</h3>
       <div className="codex-head-actions">
         <Button variant="ghost" size="sm" data-action="codex-new-chat" title="대화 기록을 지우고 새로 시작" disabled={busy || !messages.length} onClick={() => void startNew()}><Plus size={16} />새 대화</Button>
         <Button variant="ghost" size="icon-sm" data-action="codex-pin" title={pinned ? '고정 해제 (일기 위에 겹쳐 보기)' : '고정 (일기를 옆으로 밀어 함께 보기)'} aria-label={pinned ? '고정 해제' : '패널 고정'} aria-pressed={pinned} onClick={() => setPinned(!pinned)}>{pinned ? <PinOff size={16} /> : <Pin size={16} />}</Button>

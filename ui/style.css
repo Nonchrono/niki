@@ -2379,18 +2379,6 @@
   .content {
     position: relative;
   }
-  .content > .sync-fab {
-    position: absolute;
-    right: 20px;
-    bottom: 20px;
-    z-index: 15;
-    height: 40px;
-    border-radius: 999px;
-    box-shadow: 0 4px 14px #1c261f26;
-  }
-  .content:has(.codex-summary.open) > .sync-fab {
-    right: calc(min(435px, 100%) + 16px);
-  }
   .codex-summary {
     position: absolute;
     top: 0;
@@ -2428,14 +2416,8 @@
     border-bottom: 1px solid #e0e7df;
     background: #fbfcf9;
   }
-  .codex-summary-title {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 10px;
-  }
   .codex-summary-head h3 {
-    margin: 0 0 4px;
+    margin: 0;
     font-size: 15px;
   }
   .codex-summary p, .codex-settings p {
@@ -2835,10 +2817,6 @@
     gap: 8px;
     padding: 16px;
   }
-  .codex-summary-title {
-    min-width: 0;
-    gap: 6px;
-  }
   .codex-summary-head h3 {
     white-space: nowrap;
   }
@@ -2909,11 +2887,6 @@
       padding: 18px 0 0;
     }
   }
-  @media print {
-    .sync-fab {
-      display: none !important;
-    }
-  }
 }
 :root {
   --radius: 0.625rem;
@@ -2952,10 +2925,6 @@
   #settings-detail .codex-field [data-slot="native-select-wrapper"] {
     width: 100%;
     min-width: 0;
-  }
-  .content > .sync-fab {
-    height: 40px;
-    border-radius: 999px;
   }
   .codex-chat-composer > [data-slot="button"] {
     width: 36px;
