@@ -28,6 +28,8 @@ pub struct State {
     pub clock: u64,
     pub records: BTreeMap<String, Record>,
     pub uploaded: BTreeMap<String, Stamp>,
+    /// Older readers marked AI revisions as seen without applying their contents.
+    pub remote_initialized: bool,
 }
 
 pub type Changes = BTreeMap<String, Record>;

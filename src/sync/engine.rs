@@ -518,8 +518,12 @@ fn sync_impl(
         }
     }
 
+    // The first AI-capable sync must also read revisions acknowledged by older apps.
+    // Only their AI fields are replayed; diary revisions must not be applied twice.
+    let replay_seen_ai = !store.ai_sync.remote_initialized;
     // 1. Pull remote changes
-    let (candidate_files, next_cursor) = if let Some(cursor) = store.sync_cursor.clone()
+    let (candidate_files, next_cursor) = if !replay_seen_ai
+        && let Some(cursor) = store.sync_cursor.clone()
         && (!store.entries.is_empty() || !store.seen_remote_objects.is_empty())
     {
         let batch = transport.changes(&cursor)?;
@@ -572,10 +576,12 @@ fn sync_impl(
     };
 
     let mut downloaded = Vec::new();
+    let mut replayed_ai = Vec::new();
     let mut seen_in_batch = HashSet::new();
     for (file_id, obj_id) in candidate_files {
         let key = obj_id.to_string();
-        if store.seen_remote_objects.contains_key(&key)
+        let already_seen = store.seen_remote_objects.contains_key(&key);
+        if (already_seen && !replay_seen_ai)
             || store.ignored_remote_objects.contains(&key)
             || !seen_in_batch.insert(obj_id)
         {
@@ -595,6 +601,11 @@ fn sync_impl(
             return Err(format!(
                 "BLOCKED_REMOTE:{key}:원격 동기화 버전 검증에 실패했습니다"
             ));
+        }
+        crate::sync_ai::validate(&rev.ai).map_err(|e| format!("BLOCKED_REMOTE:{key}:{e}"))?;
+        if already_seen {
+            replayed_ai.push(rev.ai);
+            continue;
         }
         if let Some(ref entry) = rev.entry {
             validate_remote_entry(entry).map_err(|e| format!("BLOCKED_REMOTE:{key}:{e}"))?;
@@ -619,7 +630,6 @@ fn sync_impl(
                 "BLOCKED_REMOTE:{key}:원격 동기화 메타데이터 검증에 실패했습니다"
             ));
         }
-        crate::sync_ai::validate(&rev.ai).map_err(|e| format!("BLOCKED_REMOTE:{key}:{e}"))?;
         downloaded.push((file_id, rev));
     }
 
@@ -629,6 +639,9 @@ fn sync_impl(
             .then_with(|| a.1.object_id.cmp(&b.1.object_id))
     });
 
+    for ai in replayed_ai {
+        crate::sync_ai::merge(store, &ai);
+    }
     for (file_id, rev) in &downloaded {
         crate::sync_ai::merge(store, &rev.ai);
         let rev_id = rev.object_id.to_string();
@@ -815,6 +828,7 @@ fn sync_impl(
     }
 
     crate::sync_ai::project(store);
+    store.ai_sync.remote_initialized = true;
 
     // Commit cursor only after all pulled revisions and media have been applied
     store.sync_cursor = Some(next_cursor);
@@ -1864,6 +1878,38 @@ mod tests {
         sync_with_transport(&mut restored, &dir_b, &client, |_| Ok(())).unwrap();
         assert!(restored.codex_conversation.is_empty() && restored.codex_search.is_empty());
         fs::remove_dir_all(dir_a).unwrap(); fs::remove_dir_all(dir_b).unwrap();
+    }
+
+    #[test]
+    fn upgrade_replays_ai_revisions_seen_by_an_older_app_without_replaying_diaries() {
+        for deleted in [false, true] {
+            let cloud = RefCell::new(MockCloud::default());
+            let client = MockClient { cloud: &cloud, key: sync_crypto::generate_key().unwrap() };
+            let dir = temp_device_dir("ai-upgrade");
+            let mut a = Store { entries: vec![Entry { id: "diary".into(), body: "original".into(), ..Entry::default() }], ..Store::default() };
+            a.codex_conversation.push(crate::codex::ChatMessage::new(crate::codex::Role::User, "shared question".into(), crate::codex::MessageKind::Chat));
+            sync_with_transport(&mut a, &dir, &client, |_| Ok(())).unwrap();
+            let mut older = a.clone();
+            older.device_id = "upgraded-device".into();
+            if deleted {
+                a.codex_conversation.clear();
+                sync_with_transport(&mut a, &dir, &client, |_| Ok(())).unwrap();
+            } else {
+                older.codex_conversation.clear();
+            }
+            // v0.1.30 remembers the Drive cursor and revision IDs but ignores `ai`.
+            older.seen_remote_objects = a.seen_remote_objects.clone();
+            older.sync_cursor = a.sync_cursor.clone();
+            older.ai_sync = Default::default();
+            older.entries[0].body = "offline edit must survive the upgrade".into();
+            older.entries[0].updated_at = "2026-11-12T00:00:00Z".into();
+            sync_with_transport(&mut older, &dir, &client, |_| Ok(())).unwrap();
+            assert!(older.ai_sync.remote_initialized);
+            assert_eq!(older.codex_conversation.len(), if deleted { 0 } else { 1 });
+            assert_eq!(older.entries[0].body, "offline edit must survive the upgrade");
+            assert!(older.sync_conflicts.is_empty(), "already applied diary revisions must not replay");
+            fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[test]
