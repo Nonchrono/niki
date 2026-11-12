@@ -55,6 +55,8 @@ pub struct ChatMessage {
     /// Diary entries looked up for this answer (assistant chat replies only).
     #[serde(default)]
     pub sources: Vec<crate::memory::SourceRef>,
+    #[serde(default)]
+    pub reply_to: Option<String>,
 }
 
 impl ChatMessage {
@@ -65,6 +67,7 @@ impl ChatMessage {
             content,
             kind,
             sources: Vec::new(),
+            reply_to: None,
         }
     }
     fn with_sources(mut self, sources: Vec<crate::memory::SourceRef>) -> Self {
@@ -757,14 +760,9 @@ pub(crate) async fn codex_summarize(
     } else {
         &title
     };
-    append_message(
-        &state,
-        ChatMessage::new(
-            Role::User,
-            format!("「{label}」 요약해 줘"),
-            MessageKind::Summary,
-        ),
-    )?;
+    let question = ChatMessage::new(Role::User, format!("「{label}」 요약해 줘"), MessageKind::Summary);
+    let question_id = question.id.clone();
+    append_message(&state, question)?;
     let home = state.data_dir.join("codex");
     let service = service.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -777,10 +775,7 @@ pub(crate) async fn codex_summarize(
     .await
     .map_err(|_| "요약 처리 실패")??;
     crate::ensure_unlocked(&state)?;
-    append_message(
-        &state,
-        ChatMessage::new(Role::Assistant, result, MessageKind::Summary),
-    )
+    append_reply(&state, ChatMessage::new(Role::Assistant, result, MessageKind::Summary), &question_id)
 }
 
 fn append_message(
@@ -789,6 +784,16 @@ fn append_message(
 ) -> Result<Vec<ChatMessage>, String> {
     crate::mutate(state, |store| {
         store.codex_conversation.push(message);
+        Ok(store.codex_conversation.clone())
+    })
+}
+
+fn append_reply(state: &crate::AppState, mut message: ChatMessage, question_id: &str) -> Result<Vec<ChatMessage>, String> {
+    crate::mutate(state, |store| {
+        if store.codex_conversation.iter().any(|m| m.id == question_id) {
+            message.reply_to = Some(question_id.to_owned());
+            store.codex_conversation.push(message);
+        }
         Ok(store.codex_conversation.clone())
     })
 }
@@ -807,6 +812,7 @@ fn ai_view(store: &crate::Store) -> crate::Store {
     let mut view = store.clone();
     let hidden = &store.codex_excluded_journals;
     view.entries.retain(|e| !hidden.contains(&e.journal_id));
+    view.codex_month_summaries.retain(|month, summary| summary.signature == crate::memory::month_signature(&view.entries, month));
     view
 }
 
@@ -825,11 +831,9 @@ fn emit_progress(app: &tauri::AppHandle, stage: &str, text: Option<&str>) {
 }
 
 /// Removes the user message that was saved for a reply that was stopped before it started.
-fn retract_last_user(state: &crate::AppState) {
+fn retract_user(state: &crate::AppState, id: &str) {
     let _ = crate::mutate(state, |store| {
-        if store.codex_conversation.last().is_some_and(|m| matches!(m.role, Role::User)) {
-            store.codex_conversation.pop();
-        }
+        store.codex_conversation.retain(|m| m.id != id);
         Ok(())
     });
 }
@@ -876,7 +880,14 @@ pub(crate) async fn codex_chat(
         };
         // With the embedding model installed, retrieval is fully local: changed entries are
         // re-embedded here and the message is matched by meaning, so no extra Codex request.
-        let semantic = entries.and_then(|entries| vectors.search(&data_dir, &entries, &message).ok());
+        let semantic = if entries.is_some() {
+            let state = app.state::<crate::AppState>();
+            let baseline = state.store.lock().map_err(|_| "일기를 읽을 수 없습니다")?.clone();
+            vectors.restore_shared(&baseline)?;
+            let result = vectors.search(&data_dir, &ai_view(&baseline).entries, &message).ok();
+            vectors.publish_shared(&state, &baseline)?;
+            result
+        } else { None };
         if cancel.load(Ordering::SeqCst) {
             return Err(CANCELLED.to_owned());
         }
@@ -899,29 +910,25 @@ pub(crate) async fn codex_chat(
             let store = state.store.lock().map_err(|_| "대화를 읽을 수 없습니다")?;
             chat_prompt(&ai_view(&store), &message, today, &plan, semantic.as_deref())?
         };
-        append_message(
-            &state,
-            ChatMessage::new(Role::User, message.trim().to_owned(), MessageKind::Chat),
-        )?;
+        let question = ChatMessage::new(Role::User, message.trim().to_owned(), MessageKind::Chat);
+        let question_id = question.id.clone();
+        append_message(&state, question)?;
         emit_progress(&app, "writing", None);
         let sink_app = app.clone();
         client.on_delta = Some(Box::new(move |text| emit_progress(&sink_app, "writing", Some(text))));
         match client.respond(prompt, CHAT_INSTRUCTIONS, CHAT_DEVELOPER_INSTRUCTIONS, &unlocked) {
             Err(e) if e == CANCELLED => {
-                retract_last_user(&state);
+                retract_user(&state, &question_id);
                 Err(e)
             }
-            other => other.map(|reply| (reply, sources)),
+            other => other.map(|reply| (reply, sources, question_id)),
         }
     })
     .await
     .map_err(|_| "대화 처리 실패")?;
-    let (result, sources) = outcome?;
+    let (result, sources, question_id) = outcome?;
     crate::ensure_unlocked(&state)?;
-    append_message(
-        &state,
-        ChatMessage::new(Role::Assistant, result, MessageKind::Chat).with_sources(sources),
-    )
+    append_reply(&state, ChatMessage::new(Role::Assistant, result, MessageKind::Chat).with_sources(sources), &question_id)
 }
 
 /// Stops the reply that is being written.
@@ -941,17 +948,21 @@ pub struct Retracted {
 pub(crate) fn codex_retract_last(
     state: tauri::State<'_, crate::AppState>,
     service: tauri::State<'_, Service>,
+    expected_last_id: String,
 ) -> Result<Retracted, String> {
     crate::ensure_unlocked(&state)?;
     let _busy = service.begin_request()?;
     crate::mutate(&state, |store| {
-        let text = retract_exchange(&mut store.codex_conversation)?;
+        let text = retract_exchange(&mut store.codex_conversation, &expected_last_id)?;
         Ok(Retracted { text, history: store.codex_conversation.clone() })
     })
 }
 
 /// Removes a trailing chat answer and the question before it; returns the question.
-fn retract_exchange(conversation: &mut Vec<ChatMessage>) -> Result<String, String> {
+fn retract_exchange(conversation: &mut Vec<ChatMessage>, expected_last_id: &str) -> Result<String, String> {
+    if conversation.last().is_none_or(|m| m.id != expected_last_id) {
+        return Err("대화가 다른 기기에서 변경됐어요. 갱신된 대화에서 다시 선택해 주세요.".into());
+    }
     let n = conversation.len();
     let chat = |m: &ChatMessage| matches!(m.kind, MessageKind::Chat);
     if n < 2
@@ -966,7 +977,7 @@ fn retract_exchange(conversation: &mut Vec<ChatMessage>) -> Result<String, Strin
     Ok(conversation.pop().map(|m| m.content).unwrap_or_default())
 }
 
-/// Starts a fresh conversation: deletes the saved chat and its summary from this device.
+/// Starts a fresh conversation; message tombstones propagate to other devices.
 #[tauri::command]
 pub(crate) fn codex_clear_conversation(
     state: tauri::State<'_, crate::AppState>,
@@ -1000,24 +1011,25 @@ pub(crate) async fn codex_refresh_memory(
 ) -> Result<MemoryProgress, String> {
     use tauri::Manager;
     crate::ensure_unlocked(&state)?;
+    let _busy = service.begin_request()?;
     let data_dir = state.data_dir.clone();
     let vectors = vectors.inner().clone();
     let codex_pending = |state: &crate::AppState| -> Result<usize, String> {
         let store = state.store.lock().map_err(|_| "일기를 읽을 수 없습니다")?;
         Ok(crate::memory::pending_count(&ai_view(&store)))
     };
-    let entries = {
-        let store = state.store.lock().map_err(|_| "일기를 읽을 수 없습니다")?;
-        ai_view(&store).entries
-    };
+    let baseline = state.store.lock().map_err(|_| "일기를 읽을 수 없습니다")?.clone();
+    vectors.restore_shared(&baseline)?;
+    let entries = ai_view(&baseline).entries;
     if vectors.pending(&data_dir, &entries) > 0 {
         let (dir, v) = (data_dir.clone(), vectors.clone());
         let left = tauri::async_runtime::spawn_blocking(move || v.index_stale(&dir, &entries, INDEX_BUDGET))
             .await
             .map_err(|_| "기억 정리 실패")??;
+        vectors.publish_shared(&state, &baseline)?;
         return Ok(MemoryProgress { remaining: left + codex_pending(&state)? });
     }
-    // Local indexing above never leaves the device. The Codex jobs below use the user's quota,
+    // Embedding runs locally; its derived vectors sync through encrypted Drive revisions. The Codex jobs below use the user's quota,
     // so they run only with consent and unless background organizing is switched off.
     let (allowed, model, fallback) = {
         let store = state.store.lock().map_err(|_| "일기를 읽을 수 없습니다")?;
@@ -1037,7 +1049,6 @@ pub(crate) async fn codex_refresh_memory(
     let Some(job) = job else {
         return Ok(MemoryProgress { remaining: 0 });
     };
-    let _busy = service.begin_request()?;
     service.cancel.store(false, Ordering::SeqCst);
     let (prompt, instructions, developer) = match &job {
         crate::memory::Job::Conversation { prompt, .. } => (
@@ -1068,14 +1079,20 @@ pub(crate) async fn codex_refresh_memory(
         match job {
             crate::memory::Job::Conversation { through_id, .. } => {
                 // The folded range must still exist in the saved conversation.
-                if store.codex_conversation.iter().any(|m| m.id == through_id) {
+                let signature = crate::memory::history_signature(&baseline.codex_conversation, &through_id);
+                if !signature.is_empty() && signature == crate::memory::history_signature(&store.codex_conversation, &through_id)
+                    && store.ai_sync.records.get("conversation") == baseline.ai_sync.records.get("conversation") {
                     store.codex_conversation_summary = Some(crate::memory::ConversationSummary {
                         through_id,
+                        signature,
                         text: crate::memory::truncate_chars(&output, 1_800),
                     });
                 }
             }
             crate::memory::Job::Month { month, signature, .. } => {
+                let key = format!("month/{month}");
+                if store.ai_sync.records.get(&key) != baseline.ai_sync.records.get(&key)
+                    || signature != crate::memory::month_signature(&ai_view(store).entries, &month) { return Ok(()); }
                 store.codex_month_summaries.insert(
                     month,
                     crate::memory::MonthSummary {
@@ -1137,8 +1154,11 @@ pub(crate) fn codex_memory_info(
     crate::ensure_unlocked(&state)?;
     let store = state.store.lock().map_err(|_| "일기를 읽을 수 없습니다")?;
     let view = ai_view(&store);
+    let mut search = vectors.info(&state.data_dir, &view.entries);
+    search.indexed_entries = crate::memory::active(&view.entries).into_iter().filter(|e| store.codex_search.get(&e.id).is_some_and(|s| s.matches(e))).count();
+    search.index_bytes = store.codex_search.values().map(|s| (s.data.len() * 3 / 4) as u64).sum();
     Ok(MemoryInfo {
-        search: vectors.info(&state.data_dir, &view.entries),
+        search,
         downloading: vectors.downloading.load(Ordering::SeqCst),
         failed: vectors.failed.load(Ordering::SeqCst),
         months_summarized: store.codex_month_summaries.len(),
@@ -1159,8 +1179,10 @@ pub(crate) fn codex_memory_reset(
     crate::ensure_unlocked(&state)?;
     let _busy = service.begin_request()?;
     match what.as_str() {
-        "index" => vectors.reset(&state.data_dir, false),
-        "model" => vectors.reset(&state.data_dir, true),
+        "index" | "model" => {
+            crate::mutate(&state, |store| { store.codex_search.clear(); Ok(()) })?;
+            vectors.reset(&state.data_dir, what == "model")
+        },
         "summaries" => crate::mutate(&state, |store| {
             store.codex_month_summaries.clear();
             store.codex_conversation_summary = None;
@@ -1395,6 +1417,22 @@ pub(crate) async fn codex_set_cli_path(
 mod tests {
     use super::*;
     #[test]
+    fn remote_clear_during_reply_cannot_resurrect_the_deleted_turn() {
+        let dir = std::env::temp_dir().join(format!("niki-chat-clear-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let state = crate::AppState { data_dir: dir.clone(), store: Arc::new(Mutex::new(crate::Store::default())), unlocked: AtomicBool::new(true), syncing: AtomicBool::new(false) };
+        let question = ChatMessage::new(Role::User, "hello".into(), MessageKind::Chat);
+        let id = question.id.clone(); append_message(&state, question).unwrap();
+        crate::mutate(&state, |store| { store.codex_conversation.clear(); Ok(()) }).unwrap();
+        let history = append_reply(&state, ChatMessage::new(Role::Assistant, "late".into(), MessageKind::Chat), &id).unwrap();
+        assert!(history.is_empty());
+        let another = ChatMessage::new(Role::User, "another device".into(), MessageKind::Chat);
+        append_message(&state, another.clone()).unwrap(); retract_user(&state, &id);
+        assert_eq!(state.store.lock().unwrap().codex_conversation[0].id, another.id, "cancelling must not delete someone else's question");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn conversation_survives_restart_and_respects_lock() {
         let dir = std::env::temp_dir().join(format!("niki-chat-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
@@ -1453,15 +1491,19 @@ mod tests {
             ChatMessage::new(Role::User, "질문".into(), MessageKind::Chat),
             ChatMessage::new(Role::Assistant, "답".into(), MessageKind::Chat),
         ];
-        assert_eq!(retract_exchange(&mut chat).unwrap(), "질문");
+        assert!(retract_exchange(&mut chat, "stale-answer").is_err());
+        assert_eq!(chat.len(), 2, "a stale screen cannot retract another device's turn");
+        let id = chat.last().unwrap().id.clone();
+        assert_eq!(retract_exchange(&mut chat, &id).unwrap(), "질문");
         assert!(chat.is_empty());
         let mut summary = vec![
             ChatMessage::new(Role::User, "요약해 줘".into(), MessageKind::Summary),
             ChatMessage::new(Role::Assistant, "요약".into(), MessageKind::Summary),
         ];
-        assert!(retract_exchange(&mut summary).is_err(), "diary summaries are not re-asked");
+        let id = summary.last().unwrap().id.clone();
+        assert!(retract_exchange(&mut summary, &id).is_err(), "diary summaries are not re-asked");
         assert_eq!(summary.len(), 2);
-        assert!(retract_exchange(&mut vec![]).is_err());
+        assert!(retract_exchange(&mut vec![], "missing").is_err());
     }
 
     #[test]

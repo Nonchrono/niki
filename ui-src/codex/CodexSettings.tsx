@@ -85,10 +85,10 @@ function PrivacyCard() {
       <span>{journal.name}</span>
     </label>)}</div>
     <h4 className="codex-subhead">대화 기록</h4>
-    <p className="subtle">대화는 이 기기에만 저장되며 동기화되지 않아요.</p>
+    <p className="subtle">같은 Google Drive 계정으로 대화·요약·검색 데이터를 동기화해요.</p>
     <div className="panel-actions">
       <Button variant="outline" className="danger" data-action="codex-clear-chat" onClick={() => void change(async () => {
-        if (!await askConfirm('지금까지의 모든 대화와 대화 요약을 이 기기에서 지울까요? 일기는 지워지지 않아요.', { okLabel: '대화 지우기', danger: true })) return;
+        if (!await askConfirm('대화와 대화 요약을 지울까요? 동기화된 다른 기기에서도 삭제됩니다. 일기는 그대로예요.', { okLabel: '대화 지우기', danger: true })) return;
         await run('codex_clear_conversation');
       })}>대화 기록 지우기</Button>
     </div>
@@ -156,6 +156,7 @@ function MemoryCard({ connected }: { connected: boolean }) {
   };
   return <div className="panel-card settings-card" data-testid="memory-card">
     <h3>일기 검색과 기억</h3>
+    <p>검색 데이터와 요약은 기기 간 공유돼요. 검색 도구는 각 기기에서 한 번 내려받아요.</p>
     {info && <>
       <p role="status"><strong>검색 모델</strong> {info.model_installed ? `설치됨 (${megabytes(info.model_bytes)})` : info.downloading ? '내려받는 중…' : info.failed ? '내려받지 못했어요. 잠시 후 다시 시도해요.' : connected ? '곧 내려받아요' : 'GPT 계정을 연결하면 내려받아요'}</p>
       <p><strong>검색 준비</strong> 일기 {info.indexed_entries}/{info.total_entries}편 · {megabytes(info.index_bytes)}</p>
@@ -164,9 +165,9 @@ function MemoryCard({ connected }: { connected: boolean }) {
     </>}
     {error && <p className="sync-error" role="alert">{error}</p>}
     <div className="panel-actions">
-      <Button variant="outline" size="sm" data-action="codex-reset-index" onClick={() => void reset('index', '일기 검색 데이터를 다시 만들까요? 일기는 지워지지 않아요. 준비 중에는 단어로만 검색해요.')}>검색 다시 준비하기</Button>
-      <Button variant="outline" size="sm" data-action="codex-reset-model" onClick={() => void reset('model', '검색 도구를 지우고 다시 받을까요? 약 112MB를 다시 내려받아요. 일기는 지워지지 않아요.')}>검색 도구 다시 받기</Button>
-      <Button variant="outline" size="sm" data-action="codex-reset-summaries" onClick={() => void reset('summaries', '월별 요약과 대화 요약을 지울까요? 대화 내용 자체는 그대로 남고, 요약은 필요할 때 다시 만들어져요.')}>요약 기억 지우기</Button>
+      <Button variant="outline" size="sm" data-action="codex-reset-index" onClick={() => void reset('index', '검색 데이터를 지우고 다시 만들까요? 다른 기기에도 반영됩니다. 일기는 그대로예요.')}>검색 다시 준비하기</Button>
+      <Button variant="outline" size="sm" data-action="codex-reset-model" onClick={() => void reset('model', '이 기기의 검색 도구를 다시 받을까요? 약 112MB를 내려받고 검색 데이터 초기화는 다른 기기에도 반영됩니다. 일기는 그대로예요.')}>검색 도구 다시 받기</Button>
+      <Button variant="outline" size="sm" data-action="codex-reset-summaries" onClick={() => void reset('summaries', '월별·대화 요약을 모든 동기화 기기에서 지울까요? 대화와 일기는 남고, 요약은 필요할 때 다시 만들어요.')}>요약 기억 지우기</Button>
     </div>
   </div>;
 }
@@ -207,7 +208,7 @@ export function CodexSettings() {
     <div className="wide-head"><h2>AI 연결</h2></div>
     <div className="panel-card settings-card codex-settings">
       <h3>ChatGPT 계정</h3>
-      <p>계정을 연결하면 Niki와 대화하고 일기를 요약할 수 있어요.</p>
+      <p>계정을 연결하면 니키와 대화하고 일기를 요약할 수 있어요.</p>
       {status?.connected ? <p role="status" className="codex-connected">연결됨 · {status.plan || 'ChatGPT'}</p> : <p role="status">{status ? status.installed ? 'ChatGPT 계정을 연결해 주세요.' : '연결 프로그램 Codex가 필요해요. 아래 설치 안내를 확인해 주세요.' : '연결 상태 확인 중…'}</p>}
       {error && <p className="sync-error" role="alert">{error}</p>}
       {login && <div className="codex-login">

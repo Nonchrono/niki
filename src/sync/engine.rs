@@ -53,6 +53,8 @@ pub struct SyncRevision {
     pub nickname: Option<String>,
     #[serde(default)]
     pub media_manifests: HashMap<String, Manifest>,
+    #[serde(default)]
+    pub ai: crate::sync_ai::Changes,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +111,7 @@ pub fn pending_upload_count(store: &Store) -> usize {
         + nickname_changes
         + store.pending_resolutions.len()
         + store.pending_uploads.len()
+        + crate::sync_ai::pending_count(store)
 }
 
 fn is_ancestor(
@@ -386,6 +389,7 @@ fn upsert_conflict(store: &mut Store, entry_id: &str, local: Option<Entry>, remo
 
 fn acknowledge_upload(store: &mut Store, pending: &PendingUpload, file_id: String) {
     let rev = &pending.revision;
+    crate::sync_ai::acknowledge(store, &rev.ai);
     let rev_id = rev.object_id.to_string();
     store.seen_remote_objects.insert(rev_id.clone(), file_id);
     store
@@ -482,6 +486,8 @@ fn sync_impl(
     if store.device_id.is_empty() {
         store.device_id = Uuid::new_v4().to_string();
     }
+    crate::embed::migrate_shared(store, data_dir);
+    crate::sync_ai::capture(store);
     let mut summary = SyncSummary::default();
 
     if !store.pending_uploads.is_empty() {
@@ -613,6 +619,7 @@ fn sync_impl(
                 "BLOCKED_REMOTE:{key}:원격 동기화 메타데이터 검증에 실패했습니다"
             ));
         }
+        crate::sync_ai::validate(&rev.ai).map_err(|e| format!("BLOCKED_REMOTE:{key}:{e}"))?;
         downloaded.push((file_id, rev));
     }
 
@@ -623,6 +630,7 @@ fn sync_impl(
     });
 
     for (file_id, rev) in &downloaded {
+        crate::sync_ai::merge(store, &rev.ai);
         let rev_id = rev.object_id.to_string();
         store
             .revision_parents
@@ -806,6 +814,8 @@ fn sync_impl(
         }
     }
 
+    crate::sync_ai::project(store);
+
     // Commit cursor only after all pulled revisions and media have been applied
     store.sync_cursor = Some(next_cursor);
     save_checkpoint(store)?;
@@ -922,6 +932,7 @@ fn sync_impl(
             deleted_template_ids,
             nickname: dirty_nickname.clone(),
             media_manifests: HashMap::new(),
+            ai: Default::default(),
         };
         upload_revision(
             store,
@@ -931,6 +942,19 @@ fn sync_impl(
             &mut summary,
             &mut save_checkpoint,
         )?;
+    }
+
+    // AI changes use the same encrypted transport and durable retry queue as diaries.
+    loop {
+        let ai = crate::sync_ai::next_batch(store);
+        if ai.is_empty() { break; }
+        let rev = SyncRevision {
+            version: 1, object_id: new_revision_uuid(), parent_ids: Vec::new(),
+            device_id: store.device_id.clone(), created_at: now(), entry: None, journal: None,
+            journals: Vec::new(), templates: Vec::new(), deleted_journal_ids: Vec::new(),
+            deleted_template_ids: Vec::new(), nickname: None, media_manifests: HashMap::new(), ai,
+        };
+        upload_revision(store, transport, rev, None, &mut summary, &mut save_checkpoint)?;
     }
 
     store.last_sync_at = Some(now());
@@ -997,6 +1021,7 @@ fn upload_entry_revision(
         deleted_template_ids: Vec::new(),
         nickname: None,
         media_manifests: entry_manifests,
+        ai: Default::default(),
     };
     upload_revision(
         store,
@@ -1797,6 +1822,77 @@ mod tests {
     }
 
     #[test]
+    fn ai_data_restores_on_new_device_and_deletions_propagate() {
+        use crate::{codex::{ChatMessage, Role, MessageKind}, memory::{MonthSummary, ConversationSummary}, embed::{SharedIndex, Indexed}};
+        let cloud = RefCell::new(MockCloud::default());
+        let client = MockClient { cloud: &cloud, key: sync_crypto::generate_key().unwrap() };
+        let dir_a = temp_device_dir("ai-a");
+        let dir_b = temp_device_dir("ai-b");
+        let entry = Entry { id: "ai-diary".into(), journal_id: "journal".into(), title: "private diary".into(), body: "private content".into(), ..Entry::default() };
+        let mut a = Store { entries: vec![entry.clone()], codex_search_migrated: true, codex_consent: true, codex_cli_path: Some("PRIVATE-LOCAL-PATH".into()), ..Store::default() };
+        a.codex_conversation.push(ChatMessage::new(Role::User, "PRIVATE-CHAT-CONTENT".into(), MessageKind::Chat));
+        let through_id = a.codex_conversation[0].id.clone();
+        a.codex_conversation_summary = Some(ConversationSummary { through_id, text: "conversation memory".into(), signature: String::new() });
+        a.codex_month_summaries.insert("2026-10".into(), MonthSummary { signature: "month-signature".into(), text: "monthly memory".into() });
+        a.codex_search.insert(entry.id.clone(), SharedIndex::from_index(&entry, &Indexed { updated_at: entry.updated_at.clone(), vectors: vec![vec![0.1; crate::embed::DIM]] }));
+        a.codex_excluded_journals.insert("hidden-journal".into());
+        sync_with_transport(&mut a, &dir_a, &client, |_| Ok(())).unwrap();
+        let mut b = Store::default();
+        sync_with_transport(&mut b, &dir_b, &client, |_| Ok(())).unwrap();
+        assert_eq!(serde_json::to_value(&a.codex_conversation).unwrap(), serde_json::to_value(&b.codex_conversation).unwrap());
+        assert_eq!(b.codex_conversation_summary.as_ref().unwrap().text, "conversation memory");
+        assert_eq!(b.codex_month_summaries["2026-10"].text, "monthly memory");
+        assert_eq!(a.codex_search, b.codex_search);
+        assert!(b.codex_excluded_journals.contains("hidden-journal"));
+        assert!(!b.codex_consent && b.codex_cli_path.is_none(), "device consent and executable paths are not shared");
+        let vectors = crate::embed::Vectors::default();
+        vectors.restore_shared(&b).unwrap();
+        assert_eq!(vectors.info(&dir_b, &b.entries).indexed_entries, 1, "restored index needs no re-embedding");
+        for (file_id, name, bytes) in &cloud.borrow().files {
+            assert!(!String::from_utf8_lossy(bytes).contains("PRIVATE-CHAT-CONTENT"), "cloud stores only ciphertext");
+            if let Some(id) = parse_revision_uuid(name) {
+                let plain = client.get(id, file_id).unwrap();
+                assert!(!String::from_utf8_lossy(&plain).contains("PRIVATE-LOCAL-PATH"));
+            }
+        }
+        b.codex_conversation.clear(); b.codex_conversation_summary = None;
+        b.codex_month_summaries.clear(); b.codex_search.clear();
+        sync_with_transport(&mut b, &dir_b, &client, |_| Ok(())).unwrap();
+        sync_with_transport(&mut a, &dir_a, &client, |_| Ok(())).unwrap();
+        assert!(a.codex_conversation.is_empty() && a.codex_search.is_empty() && a.codex_month_summaries.is_empty());
+        let mut restored = Store::default();
+        sync_with_transport(&mut restored, &dir_b, &client, |_| Ok(())).unwrap();
+        assert!(restored.codex_conversation.is_empty() && restored.codex_search.is_empty());
+        fs::remove_dir_all(dir_a).unwrap(); fs::remove_dir_all(dir_b).unwrap();
+    }
+
+    #[test]
+    fn ai_upload_retry_reuses_durable_revision_after_failed_checkpoint() {
+        let cloud = RefCell::new(MockCloud::default());
+        let client = MockClient { cloud: &cloud, key: sync_crypto::generate_key().unwrap() };
+        let dir = temp_device_dir("ai-retry");
+        let mut store = Store::default();
+        sync_with_transport(&mut store, &dir, &client, |_| Ok(())).unwrap();
+        store.codex_conversation.push(crate::codex::ChatMessage::new(crate::codex::Role::User, "keep me".into(), crate::codex::MessageKind::Chat));
+        let saved = RefCell::new(store.clone());
+        let mut queued = false;
+        let result = sync_with_transport(&mut store, &dir, &client, |checkpoint| {
+            if checkpoint.pending_uploads.iter().any(|p| !p.revision.ai.is_empty()) { queued = true; }
+            else if queued { return Err("checkpoint failed after upload".into()); }
+            *saved.borrow_mut() = checkpoint.clone(); Ok(())
+        });
+        assert!(result.is_err());
+        let files = cloud.borrow().files.len();
+        let mut retry = saved.into_inner();
+        assert_eq!(retry.pending_uploads.len(), 1);
+        sync_with_transport(&mut retry, &dir, &client, |_| Ok(())).unwrap();
+        assert_eq!(cloud.borrow().files.len(), files, "retry must not duplicate a published conversation");
+        assert_eq!(retry.codex_conversation.len(), 1);
+        assert_eq!(crate::sync_ai::pending_count(&retry), 0);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn earlier_store_and_revision_json_remain_readable() {
         let store = Store::default();
         let mut old_store = serde_json::to_value(&store).unwrap();
@@ -1805,6 +1901,7 @@ mod tests {
             "pending_uploads",
             "ignored_remote_objects",
             "blocked_remote_object",
+            "ai_sync", "codex_search", "codex_search_migrated",
         ] {
             fields.remove(name);
         }

@@ -7,13 +7,14 @@ use chrono::{Datelike, Duration, NaiveDate};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 
 /// Rolling summary of the oldest chat messages, up to and including `through_id`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ConversationSummary {
     pub through_id: String,
     pub text: String,
+    #[serde(default)]
+    pub signature: String,
 }
 
 /// A diary entry Niki looked up for an answer, shown to the user as a link.
@@ -96,12 +97,22 @@ pub fn digest(e: &Entry) -> String {
 // ---------------------------------------------------------------- summary jobs
 
 fn signature(list: &[&Entry]) -> String {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for e in list {
-        e.id.hash(&mut hasher);
-        e.updated_at.hash(&mut hasher);
-    }
-    format!("{:016x}", hasher.finish())
+    let data: Vec<_> = list.iter().map(|e| (&e.id, &e.updated_at, &e.date, &e.title, &e.body)).collect();
+    stable_signature(&data)
+}
+
+fn stable_signature(value: &(impl Serialize + ?Sized)) -> String {
+    ring::digest::digest(&ring::digest::SHA256, &serde_json::to_vec(value).unwrap()).as_ref().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+pub fn history_signature(history: &[ChatMessage], through_id: &str) -> String {
+    history.iter().position(|m| m.id == through_id).map_or_else(String::new, |i| stable_signature(&history[..=i]))
+}
+
+pub fn month_signature(entries: &[Entry], month: &str) -> String {
+    let mut list: Vec<_> = active(entries).into_iter().filter(|e| month_of(e) == month).collect();
+    list.sort_by(|a, b| a.date.cmp(&b.date).then_with(|| a.id.cmp(&b.id)));
+    signature(&list)
 }
 
 /// Months that are over (older than the newest month with entries), have at least two entries,
@@ -157,7 +168,8 @@ fn split_at_summary<'a>(
     summary: &'a Option<ConversationSummary>,
 ) -> (Option<&'a ConversationSummary>, &'a [ChatMessage]) {
     if let Some(s) = summary {
-        if let Some(i) = history.iter().position(|m| m.id == s.through_id) {
+        if let Some(i) = history.iter().position(|m| m.id == s.through_id)
+            && (s.signature.is_empty() || s.signature == history_signature(history, &s.through_id)) {
             return (Some(s), &history[i + 1..]);
         }
     }
@@ -872,7 +884,7 @@ mod tests {
         assert_eq!(store.codex_conversation[folded - 1].id, through_id);
         let before = pending_count(&store);
         store.codex_conversation_summary =
-            Some(ConversationSummary { through_id: through_id.clone(), text: "지난 대화 요약".into() });
+            Some(ConversationSummary { through_id: through_id.clone(), text: "지난 대화 요약".into(), signature: String::new() });
         assert!(pending_count(&store) < before);
         let (summary, recent) = conversation_context(&store, 10);
         assert_eq!(summary.as_deref(), Some("지난 대화 요약"));
@@ -881,7 +893,7 @@ mod tests {
         assert_eq!(recent.last().unwrap()["content"], newest.as_str());
         // A summary whose message vanished is ignored instead of sent stale.
         store.codex_conversation_summary =
-            Some(ConversationSummary { through_id: "gone".into(), text: "stale".into() });
+            Some(ConversationSummary { through_id: "gone".into(), text: "stale".into(), signature: String::new() });
         assert!(conversation_context(&store, 10).0.is_none());
         // Short chats are never folded.
         let mut small = crate::Store::default();

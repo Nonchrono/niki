@@ -78,6 +78,7 @@ cargo run
 - JSON/ZIP 가져오기, 첨부를 포함한 자체 JSON 백업
 - 인쇄 대화상자를 통한 PDF 저장
 - Google Drive(`appDataFolder`) AES-256-GCM 암호화 동기화 및 Google Drive 내 키 자동 보관, 3-way 병합 및 충돌 해결
+- 니키와 대화: 대화 기록·월별/대화 요약·일기 검색 데이터의 기기 간 동기화 ([동기화 범위와 동작](docs/AI_SYNC.md))
 - GitHub Releases 및 자체 웹 서버(`latest.json`) 기반 자동 업데이트 알림 및 원클릭 설치
 
 ## 보안 및 문서

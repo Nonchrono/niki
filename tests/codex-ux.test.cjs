@@ -59,6 +59,7 @@ const fs = require('node:fs');
             case 'codex_cancel': window.cancelRequested = true; return;
             case 'codex_clear_conversation': chatHistory.length = 0; return [];
             case 'codex_retract_last': {
+              if (args.expectedLastId !== chatHistory.at(-1)?.id) throw Error('stale conversation');
               const answer = chatHistory.pop(); const question = chatHistory.pop();
               return { text: question.content, history: structuredClone(chatHistory) };
             }
@@ -120,7 +121,7 @@ const fs = require('node:fs');
     await page.setViewportSize({ width: 1280, height: 800 });
 
     // 7 (starters) and 14 (not synced note).
-    assert.ok((await page.locator('#diary-summary-sidebar').innerText()).includes('다른 기기와 동기화되지 않아요'));
+    assert.ok((await page.locator('#diary-summary-sidebar').innerText()).includes('대화와 기억은 Google Drive로 동기화돼요.'));
     assert.equal(await page.locator('[data-action="codex-starter-summary"]').count(), 1, 'summary starter while a diary is open');
     await page.locator('[data-action="codex-starter"]').first().click();
     await page.locator('[data-testid="codex-chat-result"]').waitFor();
@@ -174,12 +175,19 @@ const fs = require('node:fs');
     await page.evaluate(() => emitProgress({ stage: 'writing', text: '지금까지 쓴 답변' }));
     await page.locator('[data-testid="codex-streaming"]').waitFor();
     assert.equal(await page.locator('[data-testid="codex-streaming"]').innerText(), '지금까지 쓴 답변');
+    await page.evaluate(() => {
+      chatHistory.push({ id: 'remote-during-request', role: 'assistant', kind: 'chat', content: '동기화로 받은 새 대화' });
+      window.dispatchEvent(new Event('niki-sync-completed'));
+    });
     await page.locator('[data-action="codex-cancel"]').click();
     await page.waitForFunction(() => !document.querySelector('[data-action="codex-cancel"]'));
     assert.equal(await callCount('codex_cancel'), 1);
     assert.equal(await composer.inputValue(), '천천히 답해 줘', 'a stopped question returns to the box');
     assert.equal(await page.locator('#diary-summary-sidebar .sync-error').count(), 0, 'stopping is not an error');
     await page.evaluate(() => { holdChat = false; });
+
+    await page.getByText('동기화로 받은 새 대화', { exact: true }).waitFor();
+    assert.equal(await composer.inputValue(), '천천히 답해 줘', 'sync preserves the composer draft');
 
     // 2 (new conversation): asks first, then clears.
     await page.locator('[data-action="codex-new-chat"]').click();
@@ -207,6 +215,18 @@ const fs = require('node:fs');
     await page.waitForFunction(() => !document.querySelector('.content.chat-pinned'));
     await page.getByRole('button', { name: '대화 닫기', exact: true }).click();
 
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('#diary-summary-sidebar')).visibility === 'hidden');
+
+    // A sync arriving while the panel is closed must refresh the existing provider.
+    await page.evaluate(() => {
+      chatHistory = [{ id: 'remote-answer', role: 'assistant', kind: 'chat', content: '다른 기기에서 이어 온 대화' }];
+      window.dispatchEvent(new Event('niki-sync-completed'));
+    });
+    await page.locator('[data-action="open-summary"]').click();
+    await page.getByText('다른 기기에서 이어 온 대화', { exact: true }).waitFor();
+    await page.locator('[data-action="codex-new-chat"]').click();
+    await page.getByRole('button', { name: '새로 시작', exact: true }).click();
+    await page.getByRole('button', { name: '대화 닫기', exact: true }).click();
     await page.waitForFunction(() => getComputedStyle(document.querySelector('#diary-summary-sidebar')).visibility === 'hidden');
 
     // 3 (hide a journal): from the sidebar menu; shown by an icon; reversible.
@@ -268,7 +288,7 @@ const fs = require('node:fs');
     assert.deepEqual(await page.evaluate(() => calls.find(c => c.name === 'codex_memory_reset').args), { what: 'index' });
 
     const privacy = await page.locator('[data-testid="privacy-card"]').innerText();
-    assert.ok(privacy.includes('동의했어요') && privacy.includes('여행 일기') && privacy.includes('동기화되지 않아요'), privacy);
+    assert.ok(privacy.includes('동의했어요') && privacy.includes('여행 일기') && privacy.includes('Google Drive'), privacy);
     await page.locator('[data-action="codex-unhide-journal"]').click();
     await page.waitForFunction(() => !document.querySelector('[data-action="codex-unhide-journal"]'));
     await page.locator('[data-action="codex-revoke-consent"]').click();

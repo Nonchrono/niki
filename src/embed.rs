@@ -3,8 +3,9 @@
 //! The model (jhgan/ko-sroberta-multitask, int8 ONNX) runs in pure Rust through tract, so diaries never
 //! leave the device for search and every release target (Windows, Apple Silicon, Intel Mac)
 //! builds without native ONNX Runtime binaries. Vectors live in `vectors.bin` next to the
-//! journal; they are derived data, rebuilt from the diary whenever an entry changes.
+//! journal; portable copies are encrypted and synced through Store. Model binaries stay local.
 use crate::Entry;
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use std::{
     collections::HashMap,
     fs,
@@ -249,9 +250,56 @@ pub fn chunks(entry: &Entry) -> Vec<String> {
     out
 }
 
+#[derive(Clone)]
 pub struct Indexed {
     pub updated_at: String,
     pub vectors: Vec<Vec<f32>>,
+}
+
+/// Portable derived vectors, bound to exact diary content and a fixed model version.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SharedIndex {
+    pub version: String,
+    pub fingerprint: String,
+    pub updated_at: String,
+    pub data: String,
+}
+
+fn fingerprint(entry: &Entry) -> String {
+    hex(ring::digest::digest(&ring::digest::SHA256, &serde_json::to_vec(&(&entry.id, &entry.journal_id, &entry.title, &entry.body, &entry.updated_at)).unwrap()).as_ref())
+}
+
+impl SharedIndex {
+    pub fn from_index(entry: &Entry, indexed: &Indexed) -> Self {
+        let bytes: Vec<u8> = indexed.vectors.iter().flatten().flat_map(|x| x.to_le_bytes()).collect();
+        Self { version: INDEX_VERSION.into(), fingerprint: fingerprint(entry), updated_at: indexed.updated_at.clone(), data: B64.encode(bytes) }
+    }
+    pub fn valid(&self) -> bool {
+        self.version.len() <= 100 && self.fingerprint.len() == 64 && self.updated_at.len() <= 100
+            && self.data.len() <= MAX_CHUNKS * DIM * 4 * 4 / 3 + 4
+            && self.decode().is_some()
+    }
+    fn decode(&self) -> Option<Indexed> {
+        let bytes = B64.decode(&self.data).ok()?;
+        if bytes.is_empty() || bytes.len() > MAX_CHUNKS * DIM * 4 || bytes.len() % (DIM * 4) != 0 { return None; }
+        let mut vectors = Vec::new();
+        for chunk in bytes.chunks_exact(DIM * 4) {
+            let vector: Vec<f32> = chunk.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+            if vector.iter().any(|x| !x.is_finite() || x.abs() > 1.01) { return None; }
+            vectors.push(vector);
+        }
+        Some(Indexed { updated_at: self.updated_at.clone(), vectors })
+    }
+    pub fn matches(&self, entry: &Entry) -> bool {
+        self.version == INDEX_VERSION && self.updated_at == entry.updated_at && self.fingerprint == fingerprint(entry)
+    }
+}
+
+pub fn migrate_shared(store: &mut crate::Store, data_dir: &Path) {
+    if store.codex_search_migrated { return; }
+    let index = VectorIndex::load(&index_path(data_dir));
+    for (id, value) in index.shared(&store.entries) { store.codex_search.entry(id).or_insert(value); }
+    store.codex_search_migrated = true;
 }
 
 #[derive(Default)]
@@ -260,6 +308,14 @@ pub struct VectorIndex {
 }
 
 impl VectorIndex {
+    fn shared(&self, entries: &[Entry]) -> HashMap<String, SharedIndex> {
+        crate::memory::active(entries).into_iter().filter_map(|entry| {
+            let indexed = self.entries.get(&entry.id)?;
+            if indexed.updated_at != entry.updated_at { return None; }
+            let shared = SharedIndex::from_index(entry, indexed);
+            shared.valid().then(|| (entry.id.clone(), shared))
+        }).collect()
+    }
     pub fn load(path: &Path) -> Self {
         fs::read(path)
             .ok()
@@ -417,6 +473,38 @@ pub struct Vectors {
 }
 
 impl Vectors {
+    pub fn restore_shared(&self, store: &crate::Store) -> Result<(), String> {
+        let mut loaded = self.loaded.lock().map_err(|_| "검색 데이터를 읽을 수 없습니다")?;
+        let entries = crate::memory::active(&store.entries).into_iter().filter_map(|entry| {
+            if store.codex_excluded_journals.contains(&entry.journal_id) { return None; }
+            let shared = store.codex_search.get(&entry.id)?;
+            if !shared.matches(entry) { return None; }
+            Some((entry.id.clone(), shared.decode()?))
+        }).collect();
+        loaded.index = Some(VectorIndex { entries });
+        Ok(())
+    }
+
+    pub fn shared(&self, entries: &[Entry]) -> Result<HashMap<String, SharedIndex>, String> {
+        let loaded = self.loaded.lock().map_err(|_| "검색 데이터를 읽을 수 없습니다")?;
+        Ok(loaded.index.as_ref().map_or_else(HashMap::new, |index| index.shared(entries)))
+    }
+
+    /// Publish only work whose source record and diary have not changed while indexing.
+    pub fn publish_shared(&self, state: &crate::AppState, baseline: &crate::Store) -> Result<(), String> {
+        let updates = self.shared(&baseline.entries)?;
+        crate::mutate(state, |store| {
+            let entries: HashMap<_, _> = store.entries.iter().map(|entry| (&entry.id, entry)).collect();
+            for (id, value) in updates {
+                let key = format!("search/{id}");
+                if store.ai_sync.records.get(&key) != baseline.ai_sync.records.get(&key) { continue; }
+                if entries.get(&id).is_some_and(|entry| entry.deleted_at.is_none() && !store.codex_excluded_journals.contains(&entry.journal_id) && value.matches(entry)) {
+                    store.codex_search.insert(id, value);
+                }
+            }
+            Ok(())
+        })
+    }
     /// Fetches the model in the background when it is missing, once a GPT account is connected
     /// (checked whenever the app reads the Codex status), retrying at most once a minute after a
     /// failure. The model is kept across app updates, so this normally happens once.
@@ -595,6 +683,43 @@ mod tests {
         assert_eq!(fresh.info(&data, &list).indexed_entries, 0);
         fresh.reset(&data, true).unwrap();
         assert!(!model_dir(&data).exists());
+        fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn shared_vectors_check_content_model_and_finite_values() {
+        let original = entry("a", "원문");
+        let indexed = Indexed { updated_at: original.updated_at.clone(), vectors: vec![vec![0.25; DIM]] };
+        let shared = SharedIndex::from_index(&original, &indexed);
+        assert!(shared.valid() && shared.matches(&original));
+        let mut edited = original.clone(); edited.body = "다른 원문".into();
+        assert!(!shared.matches(&edited), "timestamps alone cannot validate cached vectors");
+        let mut other_model = shared.clone(); other_model.version = "future-model".into();
+        assert!(!other_model.matches(&original));
+        let bad = SharedIndex::from_index(&original, &Indexed { updated_at: original.updated_at.clone(), vectors: vec![vec![f32::NAN; DIM]] });
+        assert!(!bad.valid());
+    }
+
+    #[test]
+    fn migrate_existing_vectors_once_and_do_not_restore_a_reset() {
+        let data = std::env::temp_dir().join(format!("niki-index-migration-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&data).unwrap();
+        let original = entry("a", "기존 일기");
+        let mut index = VectorIndex::default();
+        index.entries.insert(original.id.clone(), Indexed { updated_at: original.updated_at.clone(), vectors: vec![vec![0.25; DIM]] });
+        index.save(&index_path(&data)).unwrap();
+        let mut store = crate::Store { entries: vec![original], ..Default::default() };
+        migrate_shared(&mut store, &data);
+        crate::sync_ai::capture(&mut store);
+        assert_eq!(store.codex_search.len(), 1);
+        let baseline = store.clone();
+        let vectors = Vectors::default(); vectors.restore_shared(&baseline).unwrap();
+        store.codex_search.clear(); crate::sync_ai::capture(&mut store);
+        migrate_shared(&mut store, &data);
+        assert!(store.codex_search.is_empty(), "old local binary must not undo a synchronized reset");
+        let state = crate::AppState { data_dir: data.clone(), store: Arc::new(Mutex::new(store)), unlocked: AtomicBool::new(true), syncing: AtomicBool::new(false) };
+        vectors.publish_shared(&state, &baseline).unwrap();
+        assert!(state.store.lock().unwrap().codex_search.is_empty(), "in-flight indexing cannot overwrite a reset from another device");
         fs::remove_dir_all(data).unwrap();
     }
 

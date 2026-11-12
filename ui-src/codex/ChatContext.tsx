@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useApp } from '../app/AppContext';
+import { SYNC_COMPLETED } from '../lib/tauri';
 import { errorMessage } from '../lib/format';
 import { CODEX_PREFS_CHANGED, useGptConnection } from './useGptConnection';
 
@@ -35,7 +36,7 @@ const PINNED_KEY = 'niki-chat-pinned';
 const readPinned = () => { try { return localStorage.getItem(PINNED_KEY) === '1'; } catch { return false; } };
 
 export function ChatProvider({ children }: { children: ReactNode }) {
-  const { run } = useApp();
+  const { run, scheduleSync } = useApp();
   const connected = useGptConnection();
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -55,6 +56,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const stopMemory = useRef(false);
   const active = useRef(true);
   const running = useRef(false);
+  const reloadSequence = useRef(0);
+  const reloadAfterRequest = useRef(false);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   useEffect(() => { if (!connected) setOpen(false); }, [connected]);
   const setPinned = (value: boolean) => {
@@ -77,10 +80,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     try { const next = await run<Prefs>('codex_prefs'); if (active.current) setPrefs(next); } catch { /* shown as unconsented */ }
   }, [run]);
   useEffect(() => { if (connected) void reloadPrefs(); }, [connected, open, reloadPrefs]);
-  useEffect(() => {
-    window.addEventListener(CODEX_PREFS_CHANGED, reloadPrefs);
-    return () => window.removeEventListener(CODEX_PREFS_CHANGED, reloadPrefs);
-  }, [reloadPrefs]);
   const setConsent = async (value: boolean) => {
     const next = await run<Prefs>('codex_set_consent', { consented: value });
     if (active.current) setPrefs(next);
@@ -88,12 +87,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     if (value && active.current) setTimeout(() => organize(), 0);
   };
   const reload = useCallback(async () => {
+    const sequence = ++reloadSequence.current;
     try {
       const history = await run<ChatMessage[]>('codex_conversation');
-      if (active.current) { setMessages(history); setReady(true); }
-    } catch (e) { if (active.current) { setReady(false); setError(errorMessage(e)); } }
+      if (active.current && sequence === reloadSequence.current) { setMessages(history); setReady(true); }
+    } catch (e) { if (active.current && sequence === reloadSequence.current) { setReady(false); setError(errorMessage(e)); } }
   }, [run]);
-  useEffect(() => { if (open && !ready) void reload(); }, [open, reload]);
+  useEffect(() => {
+    const update = () => {
+      void reloadPrefs();
+      if (running.current) { reloadAfterRequest.current = true; return; }
+      void reload();
+    };
+    window.addEventListener(SYNC_COMPLETED, update);
+    window.addEventListener(CODEX_PREFS_CHANGED, update);
+    return () => {
+      window.removeEventListener(SYNC_COMPLETED, update);
+      window.removeEventListener(CODEX_PREFS_CHANGED, update);
+    };
+  }, [reload, reloadPrefs]);
+  useEffect(() => {
+    if (open) { if (!running.current) void reload(); scheduleSync(0); }
+  }, [open, reload, scheduleSync]);
   // Index new diaries and fold old chat in the background; it yields to any message the user sends.
   const organize = useCallback(() => {
     if (memory.current) return;
@@ -132,6 +147,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const { summaryTarget } = options;
     const text = (options.text ?? draft).trim();
     if (running.current || !connected || !ready || (!summaryTarget && !text)) return;
+    ++reloadSequence.current;
     running.current = true; setBusy(true); setError('');
     setStage(summaryTarget ? 'writing' : 'searching'); setStreamText('');
     try {
@@ -159,6 +175,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       await reload();
     } finally {
       running.current = false;
+      if (reloadAfterRequest.current) { reloadAfterRequest.current = false; void reload(); }
       if (active.current) { setPending(''); setBusy(false); setStage(null); setStreamText(''); }
     }
   };
@@ -166,11 +183,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const regenerate = async () => {
     if (running.current) return;
     try {
-      const retracted = await run<{ text: string; history: ChatMessage[] }>('codex_retract_last');
+      const retracted = await run<{ text: string; history: ChatMessage[] }>('codex_retract_last', { expectedLastId: messages.at(-1)?.id ?? '' });
       if (!active.current) return;
       setMessages(retracted.history);
       await request({ text: retracted.text });
-    } catch (e) { if (active.current) setError(errorMessage(e)); }
+    } catch (e) { if (active.current) { setError(errorMessage(e)); await reload(); } }
   };
   const clearConversation = async () => {
     if (running.current) return;

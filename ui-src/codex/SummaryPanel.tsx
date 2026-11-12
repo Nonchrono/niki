@@ -47,7 +47,7 @@ export function SummaryPanel() {
   const entryExists = (id: string) => !!data?.entries.some(entry => entry.id === id && !entry.deleted_at);
   const startNew = async () => {
     if (!messages.length) return;
-    if (await askConfirm('지금까지의 대화와 대화 요약을 이 기기에서 지우고 새로 시작할까요? 일기는 지워지지 않아요.', { okLabel: '새로 시작', danger: true })) await clearConversation();
+    if (await askConfirm('대화와 대화 요약을 지우고 새로 시작할까요? 동기화된 다른 기기에서도 삭제됩니다. 일기는 그대로예요.', { okLabel: '새로 시작', danger: true })) await clearConversation();
   };
   const copy = (message: ChatMessage) => void navigator.clipboard.writeText(message.content)
     .then(() => { setCopied(message.id); setCopyError(''); })
@@ -57,9 +57,9 @@ export function SummaryPanel() {
     else toast('이 일기에는 붙일 수 없어요. 일기를 연 상태에서 서식 편집기를 사용해 주세요.', true);
   };
   const submit = () => { if (!busy && ready && draft.trim()) void send(); };
-  return <aside className={`codex-summary${open ? ' open' : ''}`} id="diary-summary-sidebar" aria-label="Niki와 대화" aria-hidden={!open}>
+  return <aside className={`codex-summary${open ? ' open' : ''}`} id="diary-summary-sidebar" aria-label="니키와 대화" aria-hidden={!open}>
     <div className="codex-summary-head">
-      <h3>Niki와 대화</h3>
+      <h3>니키와 대화</h3>
       <div className="codex-head-actions">
         <Button variant="ghost" size="sm" data-action="codex-new-chat" title="대화 기록을 지우고 새로 시작" disabled={busy || !messages.length} onClick={() => void startNew()}><Plus size={16} />새 대화</Button>
         <Button variant="ghost" size="icon-sm" data-action="codex-pin" title={pinned ? '고정 해제 (일기 위에 겹쳐 보기)' : '고정 (일기를 옆으로 밀어 함께 보기)'} aria-label={pinned ? '고정 해제' : '패널 고정'} aria-pressed={pinned} onClick={() => setPinned(!pinned)}>{pinned ? <PinOff size={16} /> : <Pin size={16} />}</Button>
@@ -133,7 +133,7 @@ export function SummaryPanel() {
         <Button type="submit" size="icon-sm" aria-label="메시지 보내기" disabled={busy || !ready || !draft.trim()}><ArrowUp size={17} /></Button>
       </form>
       <p className="codex-input-hint" id="codex-input-hint">Enter로 전송 · Shift+Enter로 줄바꿈</p>
-      <p className="codex-footnote">대화는 이 기기에만 저장되고 다른 기기와 동기화되지 않아요.</p>
+      <p className="codex-footnote">{data?.sync_status.connected ? '대화와 기억은 Google Drive로 동기화돼요.' : 'Google Drive를 연결하면 대화와 기억도 동기화돼요.'}</p>
     </>}
   </aside>;
 }

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { invoke, setMutationListener } from '../lib/tauri';
+import { invoke, setMutationListener, SYNC_COMPLETED } from '../lib/tauri';
 import { errorMessage } from '../lib/format';
 import type { Snapshot, UpdateInfo } from '../types';
 
@@ -78,12 +78,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await leave();
       const result = await invoke<{ warnings?: string[] }>('drive_sync_now');
       await refresh();
+      window.dispatchEvent(new Event(SYNC_COMPLETED));
       retryDelay.current = 15_000;
       if (result.warnings?.length) toast(result.warnings[0], true);
       else if (manual) toast('동기화가 완료되었습니다');
     } catch (error) {
       failed = true;
-      try { await refresh(); } catch (refreshError) { console.warn(refreshError); }
+      try { await refresh(); window.dispatchEvent(new Event(SYNC_COMPLETED)); } catch (refreshError) { console.warn(refreshError); }
       if (manual) throw error;
       console.warn('Auto sync failed:', error);
     } finally {
@@ -115,11 +116,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }).catch(error => console.warn('Auto update check skipped:', error));
       }
     }).catch(error => toast(errorMessage(error), true));
-    window.__TAURI__.event?.listen('niki-sync-finished', () => { if (!syncRunning.current) void refresh().catch(console.warn); }).then(stop => { unlisten = stop; }).catch(console.warn);
+    window.__TAURI__.event?.listen('niki-sync-finished', () => { if (!syncRunning.current) void refresh().then(() => window.dispatchEvent(new Event(SYNC_COMPLETED))).catch(console.warn); }).then(stop => { unlisten = stop; }).catch(console.warn);
     const online = () => scheduleRef.current(1000);
     window.addEventListener('online', online);
+    window.addEventListener('focus', online);
     const interval = setInterval(() => scheduleRef.current(0), 300_000);
-    return () => { unlisten?.(); window.removeEventListener('online', online); clearInterval(interval); if (syncTimer.current) clearTimeout(syncTimer.current); };
+    return () => { unlisten?.(); window.removeEventListener('online', online); window.removeEventListener('focus', online); clearInterval(interval); if (syncTimer.current) clearTimeout(syncTimer.current); };
   }, [refresh, toast]);
 
   return <Context.Provider value={{ data, update, setUpdate, refresh, run, action, toast, go, registerLeave, saveBeforeLeaving: leave, syncNow, scheduleSync, syncing, media, clearMedia }}>

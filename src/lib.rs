@@ -10,6 +10,8 @@ mod drive_transport;
 mod sync_crypto;
 #[path = "sync/engine.rs"]
 mod sync_engine;
+#[path = "sync/ai.rs"]
+mod sync_ai;
 #[path = "sync/media.rs"]
 mod sync_media;
 #[path = "sync/merge.rs"]
@@ -147,9 +149,12 @@ struct Store {
     version: u32,
     codex_conversation: Vec<codex::ChatMessage>,
     codex_conversation_summary: Option<memory::ConversationSummary>,
+    ai_sync: sync_ai::State,
+    codex_search: HashMap<String, embed::SharedIndex>,
+    codex_search_migrated: bool,
     /// The user agreed to send diary text to OpenAI through Niki's chat.
     codex_consent: bool,
-    /// Journals Niki must never see. Local to this device, not synced.
+    /// Journals Niki must never see, shared with the AI memory across devices.
     codex_excluded_journals: HashSet<String>,
     codex_model: Option<String>,
     codex_model_fallback: bool,
@@ -433,6 +438,7 @@ async fn drive_connect(
             store.sync_base_journals.clear();
             store.sync_base_templates.clear();
             store.sync_base_nickname = None;
+            store.ai_sync.uploaded.clear();
             store.media_manifests.clear();
             store.last_sync_error = None;
             Ok(())
@@ -474,6 +480,7 @@ fn drive_generate_sync_key(state: State<'_, AppState>) -> Result<String, String>
         store.sync_base_journals.clear();
         store.sync_base_templates.clear();
         store.sync_base_nickname = None;
+        store.ai_sync.uploaded.clear();
         store.media_manifests.clear();
         store.last_sync_error = None;
         Ok(())
@@ -506,6 +513,7 @@ fn drive_set_sync_key(state: State<'_, AppState>, recovery_key: String) -> Resul
         store.sync_base_journals.clear();
         store.sync_base_templates.clear();
         store.sync_base_nickname = None;
+        store.ai_sync.uploaded.clear();
         store.media_manifests.clear();
         store.last_sync_error = None;
         Ok(())
@@ -742,6 +750,7 @@ fn reset_sync_tracking(store: &mut Store) {
     store.sync_base_journals.clear();
     store.sync_base_templates.clear();
     store.sync_base_nickname = None;
+    store.ai_sync.uploaded.clear();
     store.media_manifests.clear();
     store.last_sync_error = None;
 }
@@ -775,7 +784,9 @@ fn mutate<T>(
     ensure_unlocked(state)?;
     let mut guard = state.store.lock().map_err(err)?;
     let mut next = guard.clone();
+    sync_ai::capture(&mut next);
     let result = op(&mut next)?;
+    sync_ai::capture(&mut next);
     save(state, &next)?;
     *guard = next;
     Ok(result)
@@ -1600,6 +1611,8 @@ fn export_backup(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<St
     store.password_hash = None;
     store.codex_conversation.clear();
     store.codex_conversation_summary = None;
+    store.ai_sync = sync_ai::State::default();
+    store.codex_search.clear();
     store.codex_consent = false;
     store.codex_cli_path = None;
     store.codex_month_summaries.clear();
@@ -1611,6 +1624,7 @@ fn export_backup(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<St
     store.sync_base_journals.clear();
     store.sync_base_templates.clear();
     store.sync_base_nickname = None;
+    store.ai_sync.uploaded.clear();
     store.media_manifests.clear();
     store.seen_remote_objects.clear();
     store.pending_uploads.clear();
@@ -2030,6 +2044,8 @@ pub fn run() {
                     journal.color = "#576b61".into();
                 }
             }
+            embed::migrate_shared(&mut store, &data_dir);
+            sync_ai::capture(&mut store);
             let unlocked = store.password_hash.is_none();
             if let Some(icon) = app.default_window_icon().cloned()
                 && let Some(window) = app.get_webview_window("main")
